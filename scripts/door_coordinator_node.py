@@ -58,6 +58,11 @@ STATE_SERVICE_COOLDOWN_SEC = 10.0 # seconds
 # Detection runs at ~5 Hz, so 2 s gives ample margin while still expiring ghosts.
 DOOR_POSE_MAX_AGE_SEC = 2.0  # seconds
 
+# Extra horizontal padding added to each side of the door span when checking
+# path intersection. Absorbs perception noise (yolo bbox, depth, normal jitter)
+# so we don't miss intersections right at the door jambs.
+INTERSECT_SPAN_MARGIN_M = 0.15  # meters
+
 
 class DoorCoordinator:
     def __init__(self):
@@ -70,12 +75,17 @@ class DoorCoordinator:
 
         self.pre_door_distance = PRE_DOOR_DISTANCE
         self.post_door_distance = POST_DOOR_DISTANCE
+        # Auto-scaled lookahead: scan the global plan up to this many meters
+        # of arc length ahead of the robot's closest path point. Grows
+        # automatically whenever DOOR_TRIGGER_DISTANCE is increased.
+        self.lookahead_distance_m = float(DOOR_TRIGGER_DISTANCE) + float(LOOKAHEAD_SAFETY_MARGIN_M)
         
         self.state = DoorState.NAVIGATING # default 0: NAVIGATING
         self.current_plan = None
         self.latest_door_poses = []  # latest door poses from perception for one detection
         self.current_door_pose_map = None  # currently door pose
         self.original_goal = None
+        self.use_voice_assistant = USE_VOICE_ASSISTANT
         self.use_voice_confirmation = USE_VOICE_CONFIRMATION
         self.voice_confirmation_timeout_sec = VOICE_CONFIRMATION_TIMEOUT_SEC
         self.voice_confirmation_max_tries = VOICE_CONFIRMATION_MAX_TRIES
@@ -96,7 +106,7 @@ class DoorCoordinator:
         self.handling_door_pub = rospy.Publisher("/door_coordinator/handling_door", Bool, queue_size=1, latch=True)
         try:
             self.handling_door_pub.publish(Bool(data=False)) # initial its false
-        except Exception:
+        except Exception as e:
             rospy.logwarn("Failed to publish handling_door: %s", e)
 
         self._last_handling_published = False # initial its false, as no door yet handled
@@ -109,6 +119,19 @@ class DoorCoordinator:
             self.failure_pub.publish(String(data=""))
         except Exception as e:
             rospy.logwarn("Failed to publish initial failure_reason: %s", e)
+
+        # DEBUG / OBSERVABILITY (read-only; does not affect coordinator flow)
+        # `door_on_path` latched bool + reason string, useful for `rostopic echo`
+        # and for understanding why the coordinator stays in NAVIGATING.
+        self.door_on_path_pub = rospy.Publisher("/door_coordinator/door_on_path", Bool, queue_size=1, latch=True)
+        self.door_on_path_reason_pub = rospy.Publisher("/door_coordinator/door_on_path_reason", String, queue_size=1, latch=True)
+        self._last_door_on_path = None
+        self._last_door_on_path_reason = None
+        try:
+            self.door_on_path_pub.publish(Bool(data=False))
+            self.door_on_path_reason_pub.publish(String(data="initializing"))
+        except Exception as e:
+            rospy.logwarn(f"Initial door_on_path debug publish failed: {e}")
 
         # GOAL MANAGER
         # latched current target from the goal manager
@@ -131,7 +154,7 @@ class DoorCoordinator:
             rospy.logwarn("move_base action server not available after 15s; coordinator will keep running, goals may be rejected until it comes up")
         
         # TERMINAL FAILURE STATES FOR THE MOVE BASE ACTION
-        _MB_FAILURE_STATES = (
+        self._MB_FAILURE_STATES = (
             actionlib.GoalStatus.PREEMPTED,
             actionlib.GoalStatus.ABORTED,
             actionlib.GoalStatus.REJECTED,
@@ -141,7 +164,7 @@ class DoorCoordinator:
         # DOOR STATE ESTIMATOR SERVICE client
         rospy.loginfo("Waiting for door state estimator service...")
         try:
-            rospy.wait_for_service("/door/estimate_state", timeout=30)
+            rospy.wait_for_service("/door/estimate_state", timeout=5)
             self.door_state_service = rospy.ServiceProxy("/door/estimate_state", EstimateDoorState)
             rospy.loginfo("Connected to door state estimator service")
         except rospy.ROSException:
@@ -150,23 +173,34 @@ class DoorCoordinator:
 
         # VOICE ASSISTANT (optional)
         self.voice_assistant = None
-        try:
-            self.voice_assistant = get_voice_assistant(enable_listening=True)
-            rospy.loginfo("Voice assistant ready for door coordinator announcements")
-        except Exception as e:
-            rospy.logwarn(f"Voice assistant unavailable, continuing without speech: {e}")
+        if self.use_voice_assistant:
+            try:
+                self.voice_assistant = get_voice_assistant(enable_listening=True)
+                rospy.loginfo("Voice assistant ready for door coordinator announcements")
+            except Exception as e:
+                rospy.logwarn(f"Voice assistant unavailable, continuing without speech: {e}")
+                self.use_voice_confirmation = False
+        else:
+            rospy.loginfo("Voice assistant disabled (USE_VOICE_ASSISTANT=False); _speak() will log messages instead")
             self.use_voice_confirmation = False
         
         rospy.loginfo("DoorCoordinator initialized")
 
     def _speak(self, text):
-        """Best-effort speech helper that never blocks coordinator on failures."""
-        if not text or self.voice_assistant is None:
+        """Best-effort speech helper that never blocks coordinator on failures.
+
+        If the voice assistant is disabled or unavailable, log the message
+        instead so coordinator flow and observability are preserved.
+        """
+        if not text:
+            return
+        if self.voice_assistant is None:
+            rospy.loginfo(f"[SPEAK] {text}")
             return
         try:
             self.voice_assistant.speak(text)
         except Exception as e:
-            rospy.logwarn(f"Speech output failed: {e}")
+            rospy.logwarn(f"Speech output failed: {e}; falling back to log: [SPEAK] {text}")
 
     def _setup_debug_log_file(self):
         """Mirror this node's rospy log calls to a dedicated debug file.
@@ -381,7 +415,8 @@ class DoorCoordinator:
             return None
     
     def is_door_on_path(self):
-        """Check if any detected door intersects the planned path (non-blocking)"""
+        """Check if any detected door intersects the planned path. 
+            First sorts door poses by distance to the robot & removes stale door poses."""
         if self.current_plan is None or len(self.latest_door_poses) == 0:
             return False
         
@@ -389,10 +424,7 @@ class DoorCoordinator:
         if robot_pose is None:
             return False
 
-        # Drop stale snapshots (perception may have stopped publishing) and
-        # rank remaining doors by distance to the robot so we engage the
-        # closest one first instead of "first detected" wins.
-        now = rospy.Time.now()
+        now = rospy.Time.now() # will be used to check if door poses are stale
         rx = robot_pose.pose.position.x
         ry = robot_pose.pose.position.y
 
@@ -405,9 +437,9 @@ class DoorCoordinator:
             ts = dp.get("timestamp")
             if ts is not None and (now - ts).to_sec() > DOOR_POSE_MAX_AGE_SEC:
                 continue # drop stale door poses
-            fresh_doors.append(dp)
+            fresh_doors.append(dp) # keep only fresh door poses
 
-        fresh_doors.sort(key=_dist_to_robot)
+        fresh_doors.sort(key=_dist_to_robot) # door poses sorted by distance to the robot
 
         for door_pose in fresh_doors:
             if self.check_door_intersects_path(door_pose, robot_pose):
@@ -421,18 +453,31 @@ class DoorCoordinator:
         if self.current_plan is None or len(self.current_plan.poses) < 2:
             return False
 
-        # Plan must be in the same frame as the door pose for direct comparison.
-        # If TEB ever publishes the plan in odom (or anything other than map), then i is be skipped.
         plan_frame = (self.current_plan.header.frame_id or "").strip()
-        if plan_frame and plan_frame != MAP_FRAME:
+        if plan_frame and plan_frame != MAP_FRAME: # check if the Global Plan is in the Map Frame
             rospy.logwarn_throttle(10.0, f"Skipping door intersect: plan frame '{plan_frame}' != '{MAP_FRAME}'")
             return False
+
+        # door_pose_map has a structure like this (user-defined data structure):
+        # {
+        #     "position": [x, y, z],
+        #     "normal": [nx, ny, nz],
+        #     "width": width,
+        #     "door_type": door_type,
+        #     "confidence": confidence,
+        #     "timestamp": timestamp
+        # }
+        # robot_pose_map has a structure like this:
+        # {
+        #     "position": [x, y, z],
+        #     "orientation": [qx, qy, qz, qw]
+        # }
 
         xd, yd = door_pose_map["position"][:2]
         rx = robot_pose_map.pose.position.x
         ry = robot_pose_map.pose.position.y
 
-        # only engage doors within the configured trigger radius.
+        # only consider doors within the configured trigger radius
         if math.hypot(xd - rx, yd - ry) > DOOR_TRIGGER_DISTANCE:
             return False
 
@@ -443,16 +488,24 @@ class DoorCoordinator:
         if abs(float(normal[2])) > 0.5: # if the y-component of the normal is greater than 0.5, then skip
             return False
 
-        # Door span calculation
-        door_yaw_map = math.atan2(normal[1], normal[0])
+        # Door span calculation (projected onto map ground plane)
+        nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
+        door_yaw_map = math.atan2(ny, nx)
         door_width = float(door_pose_map.get("width", 0.9) or 0.9)
         # clamp to physically plausible door widths to absorb perception noise
         door_width = max(0.5, min(door_width, 1.6)) # max and min width of the door
 
-        # Span direction perpendicular to normal
+        # The 3D door span lies in the door plane. Its visible length on the
+        # floor is W * cos(tilt) = W * sqrt(1 - nz^2). Without this, a tilted
+        # normal would overestimate the ground-plane span by up to ~15% under
+        # the |nz| < 0.5 filter above.
+        proj_scale = math.sqrt(max(0.0, 1.0 - nz * nz))
+
+        # Span direction perpendicular to the normal's ground projection
         span_yaw = door_yaw_map + math.pi / 2.0
-        half_w = door_width / 2.0
-        
+        # Half-span on ground + fixed perception margin (each side)
+        half_w = (door_width * proj_scale) / 2.0 + INTERSECT_SPAN_MARGIN_M
+
         door_p1 = (xd + half_w * math.cos(span_yaw), yd + half_w * math.sin(span_yaw))
         door_p2 = (xd - half_w * math.cos(span_yaw), yd - half_w * math.sin(span_yaw))
         
@@ -464,8 +517,9 @@ class DoorCoordinator:
         # index of the closest point on the path to the robot
         closest_i = min(range(len(path)), key=lambda i: (path[i].pose.position.x - rx)**2 + (path[i].pose.position.y - ry)**2)
         
-        # future path segments only
-        end_i = min(len(path) - 1, closest_i + LOOKAHEAD_POINTS)
+        # Arc-length-based forward window so lookahead auto-scales with
+        # DOOR_TRIGGER_DISTANCE instead of relying on TEB sampling density.
+        end_i, _arc = self._compute_lookahead_end_index(path, closest_i)
         
         for i in range(closest_i, end_i):
             ax = path[i].pose.position.x
@@ -544,14 +598,15 @@ class DoorCoordinator:
         rospy.loginfo("Sent navigation goal")
     
     def trigger_pre_door(self):
-        # Save original goal to return to after door traversal.
-        # Prefer the goal manager's latched target (the real high-level goal)
-        # over the local plan's tail (which can be truncated by the planner).
+        """calculate the pre-door pose and send the goal to the robot, after preserving the original goal (for later resume)"""
         if self.original_goal is None:
+            # check external target goal from goal manager
             if self.external_target_goal is not None:
                 self.original_goal = self.external_target_goal # preferred goal from goal manager
                 rospy.loginfo("Saved original navigation goal (from goal manager)")
-            elif self.current_plan and len(self.current_plan.poses) > 0: # this is just BACKUP plan
+            
+            # extract original goal from the local plan
+            elif self.current_plan and len(self.current_plan.poses) > 0: # this is just BACKUP plan, if goal manager is not available
                 self.original_goal = self.current_plan.poses[-1]
                 rospy.loginfo("Saved original navigation goal (from local plan tail)")
             else:
@@ -609,7 +664,6 @@ class DoorCoordinator:
                     # if YES, perform state eastimation again then proceed
                     if approved:
                         # response = self.door_state_service() # Dont scan 2nd time just traverse
-                        self.door_handled = True # passable and the door is handled
                         # SPEAK that robot is proceeding through the door
                         rospy.loginfo("Human confirmed door is safe to traverse")
                         self._speak("Human confirmed. Proceeding through the door.")
@@ -674,9 +728,7 @@ class DoorCoordinator:
             return
 
         if mb_state in self._MB_FAILURE_STATES:
-            # Don't try to resume the original goal — if move_base can't reach
-            # the pre-door pose, it almost certainly can't reach anything past
-            # the door either. Halt and let an operator decide.
+            # Don't try to resume the original goal, if move_base can't reach the pre-door pose
             self._fail(reason=f"pre-door goal failed (move_base state={mb_state})")
             return
 
@@ -690,17 +742,181 @@ class DoorCoordinator:
             self.send_goal(post_goal)
             self.state = DoorState.TRAVERSING
     
+    def _compute_lookahead_end_index(self, path, closest_i):
+        """Walk forward from ``closest_i`` until arc length covers
+        ``self.lookahead_distance_m`` OR we hit the ``LOOKAHEAD_POINTS``
+        safety cap. Returns ``(end_i, arc_length_m)``.
+
+        ``end_i`` is the last valid index for ``path[end_i+1]`` so the
+        intersection loop can iterate ``range(closest_i, end_i)`` safely.
+        """
+        n = len(path)
+        if n <= 1 or closest_i >= n - 1:
+            return closest_i, 0.0
+
+        end_i = closest_i
+        arc = 0.0
+        max_advance = min(LOOKAHEAD_POINTS, (n - 1) - closest_i)
+        for _ in range(max_advance):
+            ax = path[end_i].pose.position.x
+            ay = path[end_i].pose.position.y
+            bx = path[end_i + 1].pose.position.x
+            by = path[end_i + 1].pose.position.y
+            arc += math.hypot(bx - ax, by - ay)
+            end_i += 1
+            if arc >= self.lookahead_distance_m:
+                break
+        return end_i, arc
+
+    def _evaluate_door_on_path_reason(self):
+        """Read-only diagnostic of door-on-path with a reason string.
+
+        Mirrors the gating checks in :meth:`is_door_on_path` and
+        :meth:`check_door_intersects_path` but never mutates coordinator
+        state. Returns ``(bool, str)``; intended only for observability.
+        """
+        if self.current_plan is None and len(self.latest_door_poses) == 0:
+            return False, "missing_plan_and_door_poses"
+        if self.current_plan is None:
+            return False, "missing_global_plan"
+        if len(self.latest_door_poses) == 0:
+            return False, "missing_door_poses"
+
+        plan_frame = (self.current_plan.header.frame_id or "").strip()
+        if plan_frame and plan_frame != MAP_FRAME:
+            return False, f"plan_frame_mismatch:{plan_frame}"
+        if len(self.current_plan.poses) < 2:
+            return False, "plan_has_less_than_2_points"
+
+        robot_pose = self.get_robot_pose_in_map()
+        if robot_pose is None:
+            return False, "missing_robot_pose_in_map"
+
+        now = rospy.Time.now()
+        rx = robot_pose.pose.position.x
+        ry = robot_pose.pose.position.y
+
+        fresh = []
+        for dp in self.latest_door_poses:
+            ts = dp.get("timestamp")
+            if ts is not None and (now - ts).to_sec() > DOOR_POSE_MAX_AGE_SEC:
+                continue
+            fresh.append(dp)
+        if not fresh:
+            return False, "all_door_poses_stale"
+
+        fresh.sort(key=lambda dp: math.hypot(dp["position"][0] - rx,
+                                             dp["position"][1] - ry))
+
+        fallback_reason = "no_door_intersection_in_lookahead"
+        for dp in fresh:
+            xd, yd = dp["position"][:2]
+            distance = math.hypot(xd - rx, yd - ry)
+            if distance > DOOR_TRIGGER_DISTANCE:
+                fallback_reason = (
+                    f"closest_door_too_far:{distance:.2f}m>{DOOR_TRIGGER_DISTANCE:.2f}m"
+                )
+                continue
+
+            normal = dp.get("normal", [0.0, 0.0, 0.0])
+            nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
+            if abs(nz) > 0.5:
+                fallback_reason = f"normal_z_too_high:{nz:.2f}"
+                continue
+
+            door_yaw = math.atan2(ny, nx)
+            door_width = float(dp.get("width", 0.9) or 0.9)
+            door_width = max(0.5, min(door_width, 1.6))
+            proj_scale = math.sqrt(max(0.0, 1.0 - nz * nz))
+            span_yaw = door_yaw + math.pi / 2.0
+            half_w = (door_width * proj_scale) / 2.0 + INTERSECT_SPAN_MARGIN_M
+            d_p1 = (xd + half_w * math.cos(span_yaw), yd + half_w * math.sin(span_yaw))
+            d_p2 = (xd - half_w * math.cos(span_yaw), yd - half_w * math.sin(span_yaw))
+
+            path = self.current_plan.poses
+            closest_i = min(
+                range(len(path)),
+                key=lambda i: (path[i].pose.position.x - rx) ** 2
+                              + (path[i].pose.position.y - ry) ** 2,
+            )
+            # Same arc-length window the live gate uses.
+            end_i, lookahead_meters = self._compute_lookahead_end_index(path, closest_i)
+
+            # Closest path-point distance to door center within the window.
+            # Helps tell "window too short" from "path misses the door".
+            min_path_to_door = float("inf")
+            for i in range(closest_i, end_i):
+                ax = path[i].pose.position.x
+                ay = path[i].pose.position.y
+                bx = path[i + 1].pose.position.x
+                by = path[i + 1].pose.position.y
+                dx = ax - xd
+                dy = ay - yd
+                d_pt = math.hypot(dx, dy)
+                if d_pt < min_path_to_door:
+                    min_path_to_door = d_pt
+
+                if segments_intersect((ax, ay), (bx, by), d_p1, d_p2):
+                    return True, f"door_at_{distance:.2f}m_intersects_segment:{i}"
+
+            if min_path_to_door == float("inf"):
+                fallback_reason = (
+                    f"no_path_segments_in_lookahead | door_at={distance:.2f}m | "
+                    f"plan_pts={len(path)} closest_i={closest_i} end_i={end_i}"
+                )
+            else:
+                fallback_reason = (
+                    f"no_intersection | door_at={distance:.2f}m | "
+                    f"min_path_to_door={min_path_to_door:.2f}m | "
+                    f"lookahead={lookahead_meters:.2f}m (target={self.lookahead_distance_m:.2f}m, "
+                    f"{end_i - closest_i} segs) | plan_pts={len(path)} closest_i={closest_i}"
+                )
+
+        return False, fallback_reason
+
+    def _publish_door_on_path_debug(self):
+        """Publish latched debug topics; only republish when value changes."""
+        try:
+            value, reason = self._evaluate_door_on_path_reason()
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"door_on_path evaluation failed: {e}")
+            return
+
+        if value == self._last_door_on_path and reason == self._last_door_on_path_reason:
+            return
+        try:
+            self.door_on_path_pub.publish(Bool(data=bool(value)))
+            self.door_on_path_reason_pub.publish(String(data=str(reason)))
+            self._last_door_on_path = bool(value)
+            self._last_door_on_path_reason = str(reason)
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"door_on_path debug publish failed: {e}")
+
+    def _log_state_throttled(self, period_sec=2.0):
+        """Periodically print coordinator state for log visibility."""
+        try:
+            state_name = self.state.name
+        except Exception:
+            state_name = str(self.state)
+        plan_str = "yes" if self.current_plan is not None else "no"
+        on_path = self._last_door_on_path
+        reason = self._last_door_on_path_reason or "-"
+        rospy.loginfo_throttle(
+            period_sec,
+            f"[STATE] {state_name} | doors={len(self.latest_door_poses)} | "
+            f"plan={plan_str} | on_path={on_path} | reason={reason}",
+        )
+
     def spin(self):
         rate = rospy.Rate(10)
         while not rospy.is_shutdown():
+            self._publish_door_on_path_debug()
+            self._log_state_throttled(period_sec=1.0)
+
             # "handling" only while the coordinator is *actively* engaged with
             # a door. NAVIGATING and FAILED both mean idle (the robot is not
             # being commanded by door logic), so both publish False.
-            is_handling = self.state in (
-                DoorState.APPROACHING_DOOR,
-                DoorState.AT_PRE_DOOR,
-                DoorState.TRAVERSING,
-            )
+            is_handling = self.state in (DoorState.APPROACHING_DOOR,DoorState.AT_PRE_DOOR, DoorState.TRAVERSING,)
             if is_handling != self._last_handling_published: # publish only when last handling not yet published, this for 10Hz rate
                 try:
                     self.handling_door_pub.publish(Bool(data=is_handling)) # publish only 1st time when handling door

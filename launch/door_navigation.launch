@@ -26,14 +26,6 @@
     <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
     
     <!-- Door Coordinator Node -->
-    <!-- <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/> -->
-
-    <!-- RGB-D Image Publisher Node (testing only, real one is camera node) -->
-    <!-- <node pkg="door_navigation" type="image_publisher_test.py" name="image_publisher_node" output="screen"/> -->
-    
-    <!--
-    <node pkg="rviz" type="rviz" name="door_navigation_rviz" 
-          args="-d $(find door_navigation)/rviz/door_navigation.rviz"/>
-    -->
+    <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/>
     
 </launch>

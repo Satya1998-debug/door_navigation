@@ -57,6 +57,21 @@ Then launch ROS nodes as usual.
 
 ---
 
+### Enable CLOCK synchronization (in Jetson ORIN)
+
+- install the service: (if not installed before)
+```bash
+sudo apt-get update
+sudo apt-get install -y systemd-timesyncd
+```
+
+- then enable the service:
+```bash
+sudo systemctl enable --now systemd-timesyncd
+timedatectl set-ntp true
+timedatectl status
+```
+
 ## 3. Permanent Sync (Recommended)
 
 Configure the Go1 NX to continuously micro-adjust its clock using `systemd-timesyncd` (already installed on Ubuntu).

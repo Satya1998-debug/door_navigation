@@ -64,7 +64,7 @@ from utils.utils import crop_to_bbox_depth
 POSE_PUB_QSIZE = 1
 RGB_SUB_QSIZE = 1
 DEPTH_SUB_QSIZE = 1
-MAX_POSE_RADIUS_M = 5  # max distance to consider for pose estimation (to filter out far away false positives)
+MAX_POSE_RADIUS_M = 7  # max distance to consider for pose estimation (to filter out far away false positives)
 
 class DoorDetectionAndPoseNode:
     """Combined node for door detection and 3D pose estimation"""
@@ -168,28 +168,28 @@ class DoorDetectionAndPoseNode:
         marker_array.markers.append(delete_marker)
 
         for index, door in enumerate(pose_array.doors):
+            base_id = index * 5
             width = float(door.width) if float(door.width) > 0.0 else 0.9
+            normal_scale = max(width, 1.0)
+            marker_z = 0.05  # project visualization onto map plane
 
             center_marker = Marker()
             center_marker.header.frame_id = "map"
             center_marker.header.stamp = pose_array.header.stamp
             center_marker.ns = "detect_center"
-            center_marker.id = index * 3
+            center_marker.id = base_id
             center_marker.type = Marker.SPHERE
             center_marker.action = Marker.ADD
             center_marker.pose.position.x = float(door.position.x)
             center_marker.pose.position.y = float(door.position.y)
-            center_marker.pose.position.z = float(door.position.z)
+            center_marker.pose.position.z = marker_z
             center_marker.pose.orientation.w = 1.0
-            center_marker.scale.x = 0.18
-            center_marker.scale.y = 0.18
-            center_marker.scale.z = 0.18
-            center_marker.color.r = 0.1
-            center_marker.scale.x = 0.40
-            center_marker.scale.y = 0.40
-            center_marker.scale.z = 0.40
-            center_marker.lifetime = rospy.Duration(0)
-            center_marker.color.b = 0.1
+            center_marker.scale.x = 0.22
+            center_marker.scale.y = 0.22
+            center_marker.scale.z = 0.22
+            center_marker.color.r = 0.10
+            center_marker.color.g = 0.95
+            center_marker.color.b = 0.10
             center_marker.color.a = 1.0
             center_marker.lifetime = rospy.Duration(0.75)
             marker_array.markers.append(center_marker)
@@ -198,50 +198,101 @@ class DoorDetectionAndPoseNode:
             normal_marker.header.frame_id = "map"
             normal_marker.header.stamp = pose_array.header.stamp
             normal_marker.ns = "detect_normal"
-            normal_marker.id = index * 3 + 1
-            normal_marker.type = Marker.LINE_STRIP
+            normal_marker.id = base_id + 1
+            normal_marker.type = Marker.ARROW
             normal_marker.action = Marker.ADD
-            normal_marker.scale.x = 0.05
+            normal_marker.scale.x = 0.035  # shaft diameter
+            normal_marker.scale.y = 0.08   # head diameter
+            normal_marker.scale.z = 0.10   # head length
             normal_marker.color.r = 1.0
             normal_marker.color.g = 0.2
             normal_marker.color.b = 0.2
             normal_marker.color.a = 1.0
-            normal_marker.scale.x = 0.08
-            normal_marker.lifetime = rospy.Duration(0)
             normal_marker.points = [
-                self._make_point(door.position.x, door.position.y, door.position.z),
+                self._make_point(door.position.x, door.position.y, marker_z),
                 self._make_point(
-                    door.position.x + door.normal.x * max(width, 1.0),
-                    door.position.y + door.normal.y * max(width, 1.0),
-                    door.position.z + door.normal.z * max(width, 1.0),
+                    door.position.x + door.normal.x * normal_scale,
+                    door.position.y + door.normal.y * normal_scale,
+                    marker_z,
                 ),
             ]
+            normal_marker.lifetime = rospy.Duration(0.75)
             marker_array.markers.append(normal_marker)
+
+            door_yaw = np.arctan2(door.normal.y, door.normal.x)
+            span_yaw = door_yaw + np.pi / 2.0
+            half_w = width / 2.0
+            span_marker = Marker()
+            span_marker.header.frame_id = "map"
+            span_marker.header.stamp = pose_array.header.stamp
+            span_marker.ns = "detect_span"
+            span_marker.id = base_id + 2
+            span_marker.type = Marker.LINE_STRIP
+            span_marker.action = Marker.ADD
+            span_marker.scale.x = 0.03
+            span_marker.color.r = 1.0
+            span_marker.color.g = 0.9
+            span_marker.color.b = 0.0
+            span_marker.color.a = 0.95
+            span_marker.points = [
+                self._make_point(
+                    door.position.x + half_w * np.cos(span_yaw),
+                    door.position.y + half_w * np.sin(span_yaw),
+                    marker_z,
+                ),
+                self._make_point(
+                    door.position.x - half_w * np.cos(span_yaw),
+                    door.position.y - half_w * np.sin(span_yaw),
+                    marker_z,
+                ),
+            ]
+            span_marker.lifetime = rospy.Duration(0.75)
+            marker_array.markers.append(span_marker)
 
             pre_goal_x = door.position.x + door.normal.x * PRE_DOOR_DISTANCE
             pre_goal_y = door.position.y + door.normal.y * PRE_DOOR_DISTANCE
-            pre_goal_z = door.position.z + door.normal.z * PRE_DOOR_DISTANCE
+            pre_goal_z = marker_z
 
             pre_marker = Marker()
             pre_marker.header.frame_id = "map"
             pre_marker.header.stamp = pose_array.header.stamp
             pre_marker.ns = "detect_pre_goal"
-            pre_marker.id = index * 3 + 2
-            pre_marker.type = Marker.SPHERE
+            pre_marker.id = base_id + 3
+            pre_marker.type = Marker.CUBE
             pre_marker.action = Marker.ADD
             pre_marker.pose.position.x = float(pre_goal_x)
             pre_marker.pose.position.y = float(pre_goal_y)
             pre_marker.pose.position.z = float(pre_goal_z)
             pre_marker.pose.orientation.w = 1.0
-            pre_marker.scale.x = 0.30
-            pre_marker.scale.y = 0.30
-            pre_marker.scale.z = 0.30
-            pre_marker.color.r = 0.1
-            pre_marker.color.g = 0.3
+            pre_marker.scale.x = 0.20
+            pre_marker.scale.y = 0.20
+            pre_marker.scale.z = 0.20
+            pre_marker.color.r = 0.25
+            pre_marker.color.g = 0.35
             pre_marker.color.b = 1.0
-            pre_marker.color.a = 1.0
+            pre_marker.color.a = 0.95
             pre_marker.lifetime = rospy.Duration(0.75)
             marker_array.markers.append(pre_marker)
+
+            text_marker = Marker()
+            text_marker.header.frame_id = "map"
+            text_marker.header.stamp = pose_array.header.stamp
+            text_marker.ns = "detect_text"
+            text_marker.id = base_id + 4
+            text_marker.type = Marker.TEXT_VIEW_FACING
+            text_marker.action = Marker.ADD
+            text_marker.pose.position.x = float(door.position.x)
+            text_marker.pose.position.y = float(door.position.y)
+            text_marker.pose.position.z = marker_z + 0.35
+            text_marker.pose.orientation.w = 1.0
+            text_marker.scale.z = 0.18
+            text_marker.color.r = 1.0
+            text_marker.color.g = 1.0
+            text_marker.color.b = 1.0
+            text_marker.color.a = 1.0
+            text_marker.text = f"{door.door_type} | conf={door.confidence:.2f} | w={width:.2f}m"
+            text_marker.lifetime = rospy.Duration(0.75)
+            marker_array.markers.append(text_marker)
 
         self.marker_pub.publish(marker_array)
     

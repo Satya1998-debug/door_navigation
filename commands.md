@@ -175,8 +175,14 @@ Uses move_base action server + `/door/estimate_state` service.
 ```bash
 rosrun door_navigation door_coordinator_node.py
 
+# for goal manager
 rostopic echo /door_coordinator/handling_door
 rostopic echo /door_coordinator/failure_reason
+
+# debug topics for door intersection
+rostopic echo /door_coordinator/door_on_path_reason
+rostopic echo /door_coordinator/door_on_path
+
 ```
 
 ### Voice assistant (optional)
@@ -195,7 +201,7 @@ Services:
   to `goal_sender` and blocks until arrival / failure / timeout
 
 ```bash
-rosrun door_navigation robot_command_bridge.py
+rosrun door_navigation robot_command_bridge.py _locations_yaml:=/home/ias/satya/catkin_ws/src/door_navigation/saved_locations_map_area_04.yaml
 
 # Trigger door coordinator launch
 rosservice call /agent/start_door_coordinator
@@ -276,11 +282,17 @@ rosbag record --lz4 -O nav_only_$(date +%Y%m%d_%H%M%S).bag \
 rosbag info my_recording.bag
 
 # Play with clock so node timestamps line up
-rosparam set use_sim_time true
+rosparam set /use_sim_time true
 rosbag play --clock my_recording.bag
 
 # Filter topics on playback
 rosbag play --clock --topics /camera/color/image_raw /camera/aligned_depth_to_color/image_raw my_recording.bag
+
+rosbag play --clock --pause   door_coord_test_20260628_162442_0.bag   door_coord_test_20260628_162442_1.bag   door_coord_test_20260628_162442_2.bag
+
+rosbag play --clock --pause --rate 0.5 --start=80 --duration=20 door_coord_test_20260628_162442_0.bag door_coord_test_20260628_162442_1.bag door_coord_test_20260628_162442_2.bag
+
+
 ```
 
 ## 11. TensorRT / model commands

@@ -28,8 +28,13 @@ USE_VLM = True  # set to False to disable VLM and use only geometric reasoning f
 TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
 POST_DOOR_DISTANCE = 2.0  # meters after door
 PRE_DOOR_DISTANCE = 2.0   # meters before door
-DOOR_TRIGGER_DISTANCE = 4.0  # start door logic when closer than this
-LOOKAHEAD_POINTS = 80  # tune based on plan density
+DOOR_TRIGGER_DISTANCE = 6.0  # start door logic when closer than this
+# Arc-length safety margin added on top of DOOR_TRIGGER_DISTANCE when scanning
+# the global plan for door intersections. Lookahead = trigger + this margin.
+LOOKAHEAD_SAFETY_MARGIN_M = 1.0  # meters
+# Hard upper bound on number of forward path segments to scan. Prevents
+# pathological scans on very long plans (acts as a safety cap, not the limit).
+LOOKAHEAD_POINTS = 500
 
 # detector parameters
 LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}  # class id to name mapping
@@ -86,10 +91,11 @@ SPEECH_RECOGNITION_MODEL_PATH = "/home/ias/satya/catkin_ws/src/door_navigation/s
 SPEECH_OUTPUT_DIR = "/home/ias/satya/catkin_ws/src/door_navigation/scripts/output/"
 VOSK_ENABLE_LOGS = False
 QUIET_ALSA_WARNINGS = True
-SPEAKER_DEVICE_INDEX = 26 # default output device (after pavucontrol volume setup)
-MIC_DEVICE_INDEX = 1
+SPEAKER_DEVICE_INDEX = 1 # default output device (after pavucontrol volume setup)
+MIC_DEVICE_INDEX = 0
 
 # human confirmation behavior in door coordinator
+USE_VOICE_ASSISTANT = False  # when False, _speak() will log instead of speaking, and voice assistant is not initialized
 USE_VOICE_CONFIRMATION = False
 VOICE_CONFIRMATION_TIMEOUT_SEC = 7.0 # seconds
 VOICE_CONFIRMATION_MAX_TRIES = 2 # max tries for voice confirmation
