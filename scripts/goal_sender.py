@@ -22,13 +22,11 @@ GOAL_STATUS_TOPIC = '/move_base/status'
 DOOR_FAILURE_TOPIC = '/door_coordinator/failure_reason'
 BASE_FRAME = 'base_link'
 POSITION_TOLERANCE = 0.35  # meters
-# Short startup wait so the publisher has a chance to register with subscribers
+# short startup wait so the publisher has a chance to register with subscribers
 # (mainly relevant for one-shot CLI invocations; harmless for long-running nodes).
 GOAL_PUB_STARTUP_WAIT_SEC = 0.5
-# How long move_base status must sit at PREEMPTED (2) without a new ACTIVE
-# goal before we conclude nothing is running and treat it as a hard failure.
-# Chosen large enough to absorb the brief PREEMPTED window that appears while
-# the door coordinator swaps between pre-door / post-door / original goals.
+# how long move_base status must sit at PREEMPTED (2) without a new ACTIVE goal before we conclude nothing is running and treat it as a hard failure.
+# chosen large enough to absorb the brief PREEMPTED window that appears while the door coordinator swaps between pre-door / post-door / original goals.
 PREEMPTED_FAILURE_HOLD_SEC = 3.0
 
 class GoalManager:
@@ -45,17 +43,15 @@ class GoalManager:
         self.current_target_pub = rospy.Publisher('/goal_manager/current_target', PoseStamped, queue_size=1, latch=True)
         rospy.Subscriber(self.status_topic, GoalStatusArray, self.status_callback) # check goal status
 
-        # Track door-coordinator terminal failures so an in-flight
-        # wait_for_target_reached call can exit with the real reason instead
-        # of stalling until the timeout.
+        # track door-coordinator terminal failures so an in-flight
+        # wait_for_target_reached call can exit with the real reason instead of stalling until the timeout.
         self.door_failure_reason = ""
         self.door_failure_stamp = None
         rospy.Subscriber(DOOR_FAILURE_TOPIC, String, self._door_failure_callback, queue_size=1)
 
-        # Give the publisher a moment to register with subscribers (e.g. move_base).
-        # Without this, a one-shot CLI invocation can race the first publish and
-        # drop the message. For long-running consumers (robot_command_bridge) this
-        # is just a small startup delay.
+        # give the publisher a moment to register with subscribers (e.g. move_base).
+        # without this, a one-shot CLI invocation can race the first publish and drop the message. 
+        # for long-running consumers (robot_command_bridge) this is just a small startup delay.
         startup_deadline = rospy.Time.now() + rospy.Duration(GOAL_PUB_STARTUP_WAIT_SEC)
         while (self.pub.get_num_connections() == 0
                and not rospy.is_shutdown()
@@ -65,19 +61,19 @@ class GoalManager:
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
-        # Optional explicit YAML path override for standalone usage.
+        # optional explicit YAML path override for standalone usage.
         self.locations_yaml_path = locations_yaml_path
 
-        # Load locations from YAML file
+        # load locations from YAML file
         self.locations = self.load_locations(self._resolve_locations_yaml())
 
-        # Define home location (YAML key is lowercase 'home' in our saved_locations files).
+        # define home location (YAML key is lowercase 'home' in our saved_locations files).
         self.home_location_name = rospy.get_param('~home_location', 'home')
         self.home_location = self.locations.get(self.home_location_name)
         if not self.home_location:
             rospy.logwarn("Home location '%s' is not defined in the locations file.", self.home_location_name)
 
-        # Set initial variables
+        # set initial variables
         self.last_command_time = rospy.get_time()
         self.command_received = False
         self.goal_reached = False
@@ -85,7 +81,7 @@ class GoalManager:
         self.latest_status = None
         self.latest_status_text = ""
         self.current_target_goal = None
-        # Tracks the wall-clock time at which move_base status *first* became
+        # tracks the wall-clock time at which move_base status *first* became
         # PREEMPTED (2) without transitioning back to ACTIVE. Used together
         # with PREEMPTED_FAILURE_HOLD_SEC to detect an abandoned goal.
         self._preempted_since = None
@@ -205,6 +201,8 @@ class GoalManager:
         return True, "goal_sent:{}".format(location_name)
 
     def _distance_to_current_target(self):
+        # check the distance between the current target and the base frame
+        # current_target_goal = final location to the person (intermediate goals like pre-door, post-door are not considered)
         if self.current_target_goal is None:
             return None
 
@@ -236,26 +234,31 @@ class GoalManager:
         wait_start = rospy.Time.now()
         deadline = wait_start + rospy.Duration(float(timeout_sec)) if enable_timeout else None
 
+        # door coordinator can flip status back to ACTIVE between multiple goals
+        # dist_reached && status==3 in the same 200 ms tick misses real arrivals
+        saw_status_succeeded = False
+
         rate = rospy.Rate(5)
         while not rospy.is_shutdown():
             dist = self._distance_to_current_target()
             dist_reached = dist is not None and dist <= float(position_tolerance)
-            status_succeeded = self.latest_status == 3
+            if self.latest_status == 3:
+                saw_status_succeeded = True
 
-            if enable_status_check: # when enabled, we require both distance reached and status succeeded to return success
-                if dist_reached and status_succeeded:
+            if enable_status_check: # need both distance reached AND status==3 seen at least once during this wait
+                if dist_reached and saw_status_succeeded:
                     return True, "arrived"
             else: # else only distance is checked for arrival
                 if dist_reached:
                     return True, "arrived"
 
             if use_status_failures:
-                # Explicit terminal failures from move_base.
+                # explicitly check for terminal failures from move_base.
                 if self.latest_status in [4, 5, 8, 9]:
                     text = self.latest_status_text or "navigation failed"
                     return False, "move_base_failed:{}".format(text)
 
-                # Door coordinator terminal failure that happened *during* this
+                # check for door coordinator terminal failure that happened during this
                 # wait (ignore any stale latched value from before we started).
                 if (self.door_failure_reason
                         and self.door_failure_stamp is not None

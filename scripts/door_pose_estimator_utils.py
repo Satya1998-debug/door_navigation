@@ -6,7 +6,7 @@ import cv2
 import json
 import open3d as o3d
 
-# ------ path setup -----
+# path setup
 try:
     rospack = rospkg.RosPack()
     PACKAGE_PATH = rospack.get_path('door_navigation')
@@ -212,7 +212,7 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             if r_door_n is not None:
                 visualize_plane_with_normal(r_inliers, r_door_n, disp_text="double-right-door")
             
-        # Compute angle bisector if both planes fit successfully
+        # compute angle bisector if both planes fit successfully
         if l_door_n is not None and r_door_n is not None:
             print(f"Left-door-normal: [{l_door_n[0]:.3f}, {l_door_n[1]:.3f}, {l_door_n[2]:.3f}]")
             print(f"Right-door-normal: [{r_door_n[0]:.3f}, {r_door_n[1]:.3f}, {r_door_n[2]:.3f}]")
@@ -220,7 +220,7 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             normal_vector = compute_angle_bisector(l_door_n, r_door_n)
             print(f"[Double Door] Angle bisector: [{normal_vector[0]:.3f}, {normal_vector[1]:.3f}, {normal_vector[2]:.3f}]")
 
-            # Compute door center from combined left and right inliers
+            # compute door center from combined left and right inliers
             combined_inliers = np.vstack((l_inliers, r_inliers))
             door_centre = np.median(combined_inliers, axis=0).astype(np.float32)
             
@@ -230,7 +230,7 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             if visualize:
                 visualize_plane_with_normal(combined_inliers, normal_vector, disp_text="double-door-bisector")
                 
-            # Apply forward direction constraint for safety
+            # apply forward direction constraint for safety
             return normal_vector, door_centre, door_width
         elif l_door_n is not None:
             print("Right plane fit failed, using left door normal with constraint")

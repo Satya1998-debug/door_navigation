@@ -5,7 +5,7 @@ import torch.onnx
 import sys
 import rospkg
 from ultralytics import YOLO
-# Path setup for local imports
+
 # ------ path setup -----
 try:
     rospack = rospkg.RosPack()

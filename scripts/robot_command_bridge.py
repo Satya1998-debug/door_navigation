@@ -15,6 +15,7 @@ agent (e.g. robotdog_guide over rosbridge) can request navigation by
 """
 
 import os
+import signal
 import sys
 
 import rospkg
@@ -45,6 +46,15 @@ class RobotCommandBridge:
         self.goal_manager = GoalManager(init_node=False, enable_inactivity_thread=False)
 
         rospy.Service("/agent/start_navigation", StartNavigation, self.start_navigation)
+
+        # log which signal (if any) tore us down so ros_shutdown responses
+        # in the guide log can be traced back to their real cause
+        # (SIGINT=operator Ctrl-C, SIGTERM=roslaunch/kill, SIGHUP=terminal closed).
+        for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(_sig, lambda s, _f: rospy.logwarn(
+                "[Bridge] received signal %s (%s); shutting down.", s, signal.Signals(s).name
+            ))
+
         rospy.loginfo("[Bridge] Robot Command Bridge ready (service: /agent/start_navigation)")
 
     def start_navigation(self, req):

@@ -1,3 +1,7 @@
+"""
+Get audio device indices for the voice assistant.
+"""
+
 import pyaudio
 
 p = pyaudio.PyAudio()

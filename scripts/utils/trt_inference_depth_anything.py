@@ -58,7 +58,7 @@ def infer_depth_anything_torch(
     model.eval()
     t1 = time.perf_counter()
 
-    # Warmup helps avoid first-call overhead contaminating timing too much.
+    # warmup helps avoid first-call overhead contaminating timing too much.
     _ = model.infer_image(bgr_image)
 
     t2 = time.perf_counter()
@@ -118,13 +118,13 @@ class DepthAnythingTRT:
         self.logger = trt.Logger(trt.Logger.WARNING)
         self.runtime = trt.Runtime(self.logger)
         
-        # 1. Load the engine
+        # 1. load the engine
         with open(engine_path, "rb") as f:
             self.engine = self.runtime.deserialize_cuda_engine(f.read())
         
         self.context = self.engine.create_execution_context()
         
-        # 2. Allocate GPU memory
+        # 2. allocate GPU memory
         self.inputs = []
         self.outputs = []
         self.allocations = []
@@ -136,7 +136,7 @@ class DepthAnythingTRT:
             shape = self.engine.get_binding_shape(i)
             size = np.prod(shape)
             
-            # Allocate memory on GPU
+            # allocate memory on GPU
             nbytes = int(size) * np.dtype(dtype).itemsize
             allocation = cuda.mem_alloc(int(nbytes))
             self.allocations.append(int(allocation))

@@ -6,13 +6,13 @@ def crop_to_bbox_depth(img, door_box):
     if img is None:
         return None
 
-    # Depth images should be 2D. If a 3D array sneaks in, use the first channel.
+    # depth images should be 2D. If a 3D array sneaks in, use the first channel.
     if len(img.shape) == 3:
         img = img[:, :, 0]
 
     h, w = img.shape
 
-    # Accept both dicts with "bbox" and raw bbox lists/tuples.
+    # accept both dicts with "bbox" and raw bbox lists/tuples.
     if isinstance(door_box, dict):
         bbox = door_box.get("bbox")
     else:
@@ -23,7 +23,7 @@ def crop_to_bbox_depth(img, door_box):
 
     x_min, y_min, x_max, y_max = bbox
 
-    # croping safely within image bounds
+    # cropping safely within image bounds
     x_min = max(0, float(x_min))
     y_min = max(0, float(y_min))
     x_max = min(w-1, float(x_max))
@@ -37,18 +37,18 @@ def crop_to_bbox_rgb(img, door_bbox):
     h, w, _ = img.shape
     x1, y1, x2, y2 = door_bbox
 
-    # croping safely within image bounds
+    # cropping safely within image bounds
     x1 = max(0, float(x1))
     y1 = max(0, float(y1))
     x2 = min(w-1, float(x2))
     y2 = min(h-1, float(y2))
 
-    # extract ROI from RGB and depth
+    # extract ROI from RGB and depth images
     roi_img = img[int(y1):int(y2), int(x1):int(x2), :] # apply for all channels
     return roi_img
 
 def clamp_bbox(x1, x2, y1, y2, img_width, img_height):
-    # clamp bounding box coordinates to image dimensions, it basically ensures bbox is within image frame
+    # clamp bounding box coordinates to image dimensions, it basically ensures bbox is within image frame (bbox is within image bounds)
     x1_clamped = max(0, min(x1, img_width - 1))
     x2_clamped = max(0, min(x2, img_width - 1))
     y1_clamped = max(0, min(y1, img_height - 1))

@@ -1,5 +1,8 @@
 # using inverse depth model
 # calibration of DepthAnythingV2 model with RealSense depth camera
+"""
+Depth calibration using realsense depth camera and DepthAnythingV2 model. (can be adapted and used further for other depth cameras and models)
+"""
 
 import sys
 import numpy as np

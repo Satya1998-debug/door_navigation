@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Set initial pose for LIO-SAM localization without RViz.
-Usage: 
-  rosrun door_navigation set_initial_pose.py --x 7.77 --y 2.44 --yaw -1.08
-  OR
-  rosrun door_navigation set_initial_pose.py --location "Office_room"
+Set initial pose for LIO-SAM localization without RViz. This publishes the initial pose to the /initialpose topic.
 """
 
 import rospy
@@ -25,20 +21,20 @@ def set_initial_pose(x, y, yaw):
     initial_pose.header.frame_id = "map"
     initial_pose.header.stamp = rospy.Time.now()
     
-    # Position
+    # position
     initial_pose.pose.pose.position.x = x
     initial_pose.pose.pose.position.y = y
     initial_pose.pose.pose.position.z = 0.0
     
-    # Orientation (convert yaw to quaternion)
+    # orientation (convert yaw to quaternion)
     quat = quaternion_from_euler(0, 0, yaw)
     initial_pose.pose.pose.orientation.x = quat[0]
     initial_pose.pose.pose.orientation.y = quat[1]
     initial_pose.pose.pose.orientation.z = quat[2]
     initial_pose.pose.pose.orientation.w = quat[3]
     
-    # Covariance matrix (x, y, yaw uncertainty)
-    # Small values = high confidence in initial pose
+    # covariance matrix (x, y, yaw uncertainty)
+    # small values = high confidence in initial pose
     initial_pose.pose.covariance[0] = 0.25   # x variance
     initial_pose.pose.covariance[7] = 0.25   # y variance  
     initial_pose.pose.covariance[35] = 0.068 # yaw variance (about 15 degrees)
@@ -50,7 +46,7 @@ def set_initial_pose(x, y, yaw):
     rospy.loginfo(f"  Orientation: yaw={math.degrees(yaw):.1f}° ({yaw:.3f} rad)")
     rospy.loginfo("=" * 60)
     
-    # Publish multiple times to ensure it's received
+    # publish multiple times to ensure it's received
     for _ in range(3):
         pub.publish(initial_pose)
         rospy.sleep(0.5)
@@ -93,6 +89,13 @@ def load_location_from_yaml(location_name, yaml_file):
         return None
 
 if __name__ == '__main__':
+
+
+    # Usage: 
+    # rosrun door_navigation set_initial_pose.py --x 7.77 --y 2.44 --yaw -1.08
+    # OR
+    # rosrun door_navigation set_initial_pose.py --location "Office_room"
+    
     parser = argparse.ArgumentParser(description='Set initial pose for localization')
     
     group = parser.add_mutually_exclusive_group(required=True)

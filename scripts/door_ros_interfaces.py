@@ -13,7 +13,7 @@ import numpy as np
 import rospkg
 from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose
 
-# ------ path setup -----
+# path setup
 try:
     rospack = rospkg.RosPack()
     PACKAGE_PATH = rospack.get_path('door_navigation')
@@ -25,7 +25,7 @@ script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
-# Add py_packages to path so we can import depth_anything_v2, etc.
+# add py_packages to path so we can import depth_anything_v2, etc.
 py_packages_path = os.path.join(PACKAGE_PATH, 'src/door_navigation/py_packages')
 if py_packages_path not in sys.path:
     sys.path.insert(0, py_packages_path)
@@ -41,7 +41,7 @@ from utils.trt_inference_depth_anything import DepthAnythingTRT
 
 class RGBDImageReciever:
     # Subscriber class for synchronized RGB and Depth images
-    # latest RGB & Depth images are stored in self.latest_frame_color and self.latest_frame_depth
+    # latest RGB & depth images are stored in self.latest_frame_color and self.latest_frame_depth
     def __init__(self):
         rospy.loginfo("Initializing RGBD Image Reciever...")
         self.bridge = CvBridge()
@@ -70,7 +70,7 @@ class RGBDImageReciever:
         rospy.loginfo("Camera Info topic: %s", CAMERA_INFO_TOPIC)
 
     def camera_info_callback(self, msg):
-        # camera intrinsics (static parameters)
+        # camera intrinsics
         # [fx  0 cx]
         # [0  fy cy]
         # [0  0  1]
@@ -162,7 +162,7 @@ class DoorDetector:
                                device=self.device)
         rospy.loginfo(f"YOLO preload+warmup complete (dt={time.time() - t0:.3f}s)")
 
-        # Preload and warm up DepthAnything only when enabled.
+        # preload and warm up DepthAnything only when enabled
         if use_da: # use TRT model by default
             t0 = time.time()
             da_trt_model = self._load_depth_anything_trt_model()

@@ -87,6 +87,7 @@ class VoiceAssistantNode:
     # ------------------------------------------------------------------ services
 
     def _speak_cb(self, req):
+        # speak callback, executes when a text is passed to the voice assistant node
         if _is_placeholder(req.text):
             return SpeakResponse(success=True, message="empty_or_placeholder")
 
@@ -101,6 +102,7 @@ class VoiceAssistantNode:
         return SpeakResponse(success=True, message="")
 
     def _listen_cb(self, req):
+        # listen callback, executes when a voice command is passed to the voice assistant node
         if self.va.recognizer is None:
             rospy.loginfo("[voice_assistant] LISTEN request ignored: recognizer unavailable")
             return ListenResponse(text="", timed_out=True)

@@ -1,8 +1,9 @@
 #!/home/ias/satya/venv38/bin/python3
 """
-Door Coordinator (Refactored)
-Subscribes to door poses from door_pose_estimator_node and coordinates door traversal logic.
-Runs at 10 Hz without blocking on heavy vision computation.
+Door Coordinator module for door navigation.
+Subscribes to door poses from door_detect_pose_estimator, global plan, and move_base status.
+Coordinates door traversal logic and publishes door state, door on path, and failure reason.
+Runs at 10 Hz without blocking on heavy vision pipeline.
 """
 
 import os
@@ -25,7 +26,7 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
-# Path setup
+# path setup
 import rospkg
 rospack = rospkg.RosPack()
 PACKAGE_PATH = rospack.get_path('door_navigation')
@@ -33,7 +34,6 @@ script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
-# Import custom messages
 from door_navigation.msg import DoorPoseArray
 from door_navigation.srv import EstimateDoorState
 from utils.config import *
@@ -42,32 +42,28 @@ from door_pose_estimator_utils import get_post_door_pose, get_pre_door_pose
 from voice_assistant import get_voice_assistant
 
 
-# Whole-word vocab for voice/keyboard confirmation. Kept as tuples so we
-# can match on tokens instead of substrings (avoids "unsure"→"sure",
-# "stopping"→"stop", "yesterday"→"yes", "spoke"→"ok" false positives).
+# whole-word vocab for voice/keyboard confirmation. 
+# kept as tuples so we can match on tokens instead of substrings (avoids false positives like "unsure"→"sure", "stopping"→"stop", "yesterday"→"yes", "spoke"→"ok")
 _YES_TOKENS = ("yes", "yeah", "yep", "yup", "okay", "ok", "sure", "correct", "confirm", "confirmed", "affirmative", "proceed")
 _YES_BIGRAMS = (("go", "ahead"), ("sounds", "good"), ("all", "good"), ("looks", "good"), ("safe", "to"), ("i", "confirm"))
 _NO_TOKENS = ("no", "nope", "nah", "stop", "wait", "hold", "unsafe", "cancel", "abort", "negative", "don't", "dont", "not")
 
 class DoorState(Enum):
     NAVIGATING = 0
-    APPROACHING_DOOR = 1
-    AT_PRE_DOOR = 2
-    TRAVERSING = 3
+    APPROACHING_DOOR = 1 # approaching the pre-door pose
+    AT_PRE_DOOR = 2 # ready for state estimation
+    TRAVERSING = 3 # moving through the door
     FAILED = 4  # terminal: robot stopped, manual recovery required
 
 
-# minimum seconds between two consecutive door-state service calls.
-# prevents calling VLM at 10 Hz while waiting in AT_PRE_DOOR.
+# minimum seconds between two consecutive door-state service calls, prevents calling VLM at 10 Hz while waiting in AT_PRE_DOOR
 STATE_SERVICE_COOLDOWN_SEC = 10.0 # seconds
 
-# Drop perception snapshots older than this when checking door intersection.
-# Detection runs at ~5 Hz, so 2 s gives ample margin while still expiring ghosts.
+# drop perception frames older than this when checking door intersection
 DOOR_POSE_MAX_AGE_SEC = 2.0  # seconds
 
-# Extra horizontal padding added to each side of the door span when checking
-# path intersection. Absorbs perception noise (yolo bbox, depth, normal jitter)
-# so we don't miss intersections right at the door jambs.
+# extra horizontal padding added to each side of the door span when checking path intersection
+# to absorb perception noise (yolo bbox, depth, normal jitter) so we don't miss intersections right at the door corners
 INTERSECT_SPAN_MARGIN_M = 0.15  # meters
 
 
@@ -81,7 +77,7 @@ class DoorCoordinator:
         self.pre_door_distance = PRE_DOOR_DISTANCE
         self.post_door_distance = POST_DOOR_DISTANCE
 
-        # automatically tuned lookahead distance
+        # automatically tuned lookahead distance from the door trigger distance
         self.lookahead_distance_m = float(DOOR_TRIGGER_DISTANCE) + float(LOOKAHEAD_SAFETY_MARGIN_M)
         
         self.state = DoorState.NAVIGATING # default 0: NAVIGATING
@@ -137,12 +133,12 @@ class DoorCoordinator:
             rospy.logwarn(f"Initial door_on_path debug publish failed: {e}")
 
         # GOAL MANAGER
-        # latched current target from the goal manager
-        # Used as the "real" goal to resume after door traversal, instead of inferring from the local plan's tail plan[-1]
+        # latched current target from the goal manager (only the final location to the person is considered)
+        # used as the "real" goal to resume after door traversal, instead of inferring from the local plan's tail plan[-1]
         self.external_target_goal = None
         rospy.Subscriber("/goal_manager/current_target", PoseStamped, self._external_target_callback, queue_size=1)
 
-        # subscribe to door poses (from door_pose_estimator_node)
+        # subscribe to door poses (from door_detect_pose_estimator)
         rospy.Subscriber(DOOR_POSE_TOPIC, DoorPoseArray, self.door_pose_callback, queue_size=10)
         
         # subscribe to global plan
@@ -174,7 +170,7 @@ class DoorCoordinator:
             rospy.logwarn("Door state estimator service not available, will skip state checks")
             self.door_state_service = None
 
-        # VOICE ASSISTANT (optional)
+        # VOICE ASSISTANT (can be manually disabled in config)
         self.voice_assistant = None
         if self.use_voice_assistant:
             try:
@@ -267,7 +263,7 @@ class DoorCoordinator:
                 "timestamp": msg.header.stamp
             })
 
-        # Keep only the latest snapshot to represent the world state for this frame
+        # keep only the latest snapshot to represent the world state for this frame
         self.latest_door_poses = snapshot
         # self.publish_door_pose_markers(snapshot, msg.header.stamp)
 
@@ -534,9 +530,9 @@ class DoorCoordinator:
         if math.hypot(xd - rx, yd - ry) > DOOR_TRIGGER_DISTANCE:
             return False
 
-        # vertical-normal sanity: a real door has a mostly-horizontal normal.
+        # vertical-normal sanity: a real door has a mostly-horizontal normal
         # when perception misfires on floor/ceiling/glass the normal points
-        # sharply up/down and the 2D projection of the door span becomes garbage.
+        # sharply up/down and the 2D projection of the door span becomes garbage
         normal = door_pose_map.get("normal", [0.0, 0.0, 0.0])
         if abs(float(normal[2])) > 0.5: # if the y-component of the normal is greater than 0.5, then skip, meaning the door is not vertical
             return False
@@ -548,15 +544,14 @@ class DoorCoordinator:
         # clamp to physically plausible door widths to absorb perception noise
         door_width = max(0.5, min(door_width, 1.6)) # max and min width of the door
 
-        # The 3D door span lies in the door plane. Its visible length on the
-        # floor is W * cos(tilt) = W * sqrt(1 - nz^2). Without this, a tilted
-        # normal would overestimate the ground-plane span by up to ~15% under
-        # the |nz| < 0.5 filter above.
+        # the 3D door span lies in the door plane. its visible length on the
+        # floor is W * cos(tilt) = W * sqrt(1 - nz^2). without this, a tilted
+        # normal would overestimate the ground-plane span by up to approx. 15% under the |nz| < 0.5 filter above
         proj_scale = math.sqrt(max(0.0, 1.0 - nz * nz))
 
-        # Span direction perpendicular to the normal's ground projection
+        # span direction perpendicular to the normal's ground projection
         span_yaw = door_yaw_map + math.pi / 2.0
-        # Half-span on ground + fixed perception margin (each side)
+        # half-span on ground + fixed perception margin on each side
         half_w = (door_width * proj_scale) / 2.0 + INTERSECT_SPAN_MARGIN_M
 
         door_p1 = (xd + half_w * math.cos(span_yaw), yd + half_w * math.sin(span_yaw))
@@ -645,21 +640,22 @@ class DoorCoordinator:
         return goal
     
     def send_goal(self, pose_stamped):
+        # need to send intermediate goals like pre-door, post-door to the robot
         goal = MoveBaseGoal()
         goal.target_pose = pose_stamped
         self.move_base_client.send_goal(goal)
         rospy.loginfo("Sent navigation goal")
     
     def trigger_pre_door(self):
-        """calculate the pre-door pose and send the goal to the robot, after preserving the original goal (for later resume)"""
+        """calculate the pre-door pose and send the goal to the robot, after preserving the original goal (for later resume after door traversal)"""
         if self.original_goal is None:
-            # check external target goal from goal manager
+            # check external target goal from goal manager (preferred goal from goal manager)
             if self.external_target_goal is not None:
-                self.original_goal = self.external_target_goal # preferred goal from goal manager
+                self.original_goal = self.external_target_goal
                 rospy.loginfo("Saved original navigation goal (from goal manager)")
             
-            # extract original goal from the local plan
-            elif self.current_plan and len(self.current_plan.poses) > 0: # this is just BACKUP plan, if goal manager is not available
+            # extract original goal from the local plan (backup plan, if goal manager is not available)
+            elif self.current_plan and len(self.current_plan.poses) > 0:
                 self.original_goal = self.current_plan.poses[-1]
                 rospy.loginfo("Saved original navigation goal (from local plan tail)")
             else:
@@ -691,7 +687,7 @@ class DoorCoordinator:
             return
         self.last_state_service_call_ts = now_ts
 
-        # door state via service is called (at pre-door pose)
+        # door state via service is called (at pre-door pose) only once before traversing the door
         if self.door_state_service is not None:
             try:
                 rospy.loginfo("Calling door state estimator service...")
@@ -708,7 +704,7 @@ class DoorCoordinator:
                     self.send_post_door_goal()
                     return
                 else:
-                    # Human feedback: ask to open the door if not open
+                    # human feedback: ask to open the door if not open
                     now_ts = time.monotonic()
                     if now_ts - self.last_human_confirmation_prompt_ts < self.human_confirmation_cooldown_sec:
                         return
@@ -793,7 +789,7 @@ class DoorCoordinator:
             return
 
         if mb_state in self._MB_FAILURE_STATES:
-            # Don't try to resume the original goal, if move_base can't reach the pre-door pose
+            # don't try to resume the original goal, if move_base can't reach the pre-door pose
             self._fail(reason=f"pre-door goal failed (move_base state={mb_state})")
             return
 
@@ -941,11 +937,11 @@ class DoorCoordinator:
                 key=lambda i: (path[i].pose.position.x - rx) ** 2
                               + (path[i].pose.position.y - ry) ** 2,
             )
-            # Same arc-length window the live gate uses.
+            # same arc-length window the live gate uses.
             end_i, lookahead_meters = self._compute_lookahead_end_index(path, closest_i)
 
-            # Closest path-point distance to door center within the window.
-            # Helps tell "window too short" from "path misses the door".
+            # closest path-point distance to door center within the window.
+            # helps tell "window too short" from "path misses the door".
             min_path_to_door = float("inf")
             for i in range(closest_i, end_i):
                 ax = path[i].pose.position.x

@@ -167,8 +167,7 @@ class DoorStateEstimatorService:
                 rospy.logwarn(response.error_message)
                 return response
 
-            # Camera intrinsics must be available before we project any depth
-            # into 3D. Without a guard, downstream code raises AttributeError.
+            # camera intrinsics must be available before we project any depth
             if not self.camera_info_received:
                 response.door_state = "unknown"
                 response.is_passable = False
@@ -177,7 +176,7 @@ class DoorStateEstimatorService:
                 rospy.logwarn(response.error_message)
                 return response
 
-            # Ensure depth is 2D for downstream processing
+            # ensure depth is 2D for downstream processing
             if len(depth_img.shape) == 3:
                 depth_img = depth_img[:, :, 0]
 
@@ -191,7 +190,6 @@ class DoorStateEstimatorService:
                 }
             """
             
-            # Parse result
             if result is None:
                 response.door_state = "unknown"
                 response.is_passable = False

@@ -1,5 +1,9 @@
 #!/home/ias/satya/venv38/bin/python3
 
+"""
+Voice Assistant class for the door navigation system. Adapted and improved from previous voice assistant code from RAG source code.
+"""
+
 import pyttsx3 # used for text-to-speech conversion
 from vosk import Model, KaldiRecognizer, SetLogLevel # used for speech-to-text recognition
 import pyaudio # used for recording and playing audio (via microphone and speakers)
@@ -70,6 +74,9 @@ class VoiceAssistant:
     def _init_ros_service_backend(self, enable_listening, service_wait_timeout):
         """Wire up rospy.ServiceProxy handles; do NOT touch audio hardware."""
         from door_navigation.srv import Speak, Listen  # deferred: only pulled in client mode
+
+        # remembered so speak() can rebuild the proxy after a transient master hiccup
+        self._Speak = Speak
 
         try:
             rospy.wait_for_service("/voice/speak", timeout=float(service_wait_timeout))
@@ -191,7 +198,12 @@ class VoiceAssistant:
             try:
                 self._speak_srv(text=stripped, blocking=bool(blocking)) # Service call happens here
             except Exception as e:
-                rospy.logwarn(f"[VoiceAssistant] speak service failed: {e}; fallback: [SPEAK] {stripped}")
+                # transient "unable to contact master" / stale proxy: rebuild once and retry.
+                try:
+                    self._speak_srv = rospy.ServiceProxy("/voice/speak", self._Speak, persistent=False)
+                    self._speak_srv(text=stripped, blocking=bool(blocking))
+                except Exception as e2:
+                    rospy.logwarn(f"[VoiceAssistant] speak service failed: {e2}; fallback: [SPEAK] {stripped}")
             return
 
         # --- Local hardware backend ---------------------------------------------
@@ -208,7 +220,7 @@ class VoiceAssistant:
 
         self.tts_engine.save_to_file(text, filepath)
         self.tts_engine.runAndWait()
-        # Wait briefly for the WAV file to appear and grow past the header.
+        # wait briefly for the WAV file to appear and grow past the header.
         for _ in range(10):
             if os.path.exists(filepath) and os.path.getsize(filepath) > 44:
                 break

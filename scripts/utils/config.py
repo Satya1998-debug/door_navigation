@@ -1,7 +1,7 @@
 import os
 import rospkg
 
-# Try to get package path via rospkg (for rosrun), fall back to relative path (for standalone scripts)
+# path setup
 try:
     rospack = rospkg.RosPack()
     PACKAGE_PATH = rospack.get_path('door_navigation')
@@ -27,18 +27,16 @@ USE_VLM = True  # set to False to disable VLM and use only geometric reasoning f
 # DOOR navigation parameters
 TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
 POST_DOOR_DISTANCE = 2.0  # meters after door (only used when USE_POST_DOOR_POSE=True)
-PRE_DOOR_DISTANCE = 3.5   # meters before door
+PRE_DOOR_DISTANCE = 2.5   # meters before door
 DOOR_TRIGGER_DISTANCE = 6.0  # start door logic when closer than this
-# When True, coordinator commands a short "just past the door" checkpoint
+# when True, coordinator commands a short "just past the door" checkpoint
 # before resuming the original goal. Gives cleaner failure isolation and a
 # straighter TEB path through tight door frames, at the cost of a brief stop.
-# When False, coordinator sends the saved original goal directly at the
-# "door is passable" branch and treats reaching it as full door traversal.
+# when False, coordinator sends the saved original goal directly at the "door is passable" branch and treats reaching it as full door traversal.
 USE_POST_DOOR_POSE = True
-# Arc-length safety margin added on top of DOOR_TRIGGER_DISTANCE when scanning
-# the global plan for door intersections. Lookahead = trigger + this margin.
+# arc-length safety margin added on top of DOOR_TRIGGER_DISTANCE when scanning the global plan for door intersections. Lookahead = trigger + this margin.
 LOOKAHEAD_SAFETY_MARGIN_M = 1.0  # meters
-# Hard upper bound on number of forward path segments to scan. Prevents
+# hard upper bound on number of forward path segments to scan. Prevents
 # pathological scans on very long plans (acts as a safety cap, not the limit).
 LOOKAHEAD_POINTS = 500
 
@@ -54,17 +52,11 @@ IMG_DIM = (640, 480)  # original image dimensions (width, height)
 DEPTH_ANYTHING_V2_PATH = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_metric_hypersim_vits.pth')  # path to depth anything v2 model
 DEPTH_ANYTHING_V2_PATH_TRT = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_vits.engine')  # path to depth anything v2 model in onnx format for trt inference
 
-# CAMERA INTRINSICS (aligned depth to color), units in pixels
+# CAMERA INTRINSICS (aligned depth to color), units in pixels (hardcoded but not used, because intrinsics are fetched live from the camera info topic)
 FX = 385.88861083984375
 FY = 385.3906555175781
 CX = 317.80999755859375
 CY = 243.65032958984375
-
-
-fx = 386.3353
-fy = 385.8988
-cx = 325.0646
-cy = 246.0962
 
 # speech recognition model
 SPEECH_RECOGNITION_MODEL = "vosk-model-en-us-0.22" # "vosk-model-small-en-us-0.15" # "vosk-model-en-us-0.22"
@@ -72,7 +64,9 @@ SPEECH_RECOGNITION_MODEL_PATH = "/home/ias/satya/catkin_ws/src/door_navigation/s
 SPEECH_OUTPUT_DIR = "/home/ias/satya/catkin_ws/src/door_navigation/scripts/output/"
 VOSK_ENABLE_LOGS = False
 QUIET_ALSA_WARNINGS = True
-SPEAKER_DEVICE_INDEX = 1 # default output device (after pavucontrol volume setup)
+
+# SPEAKER and MIC device indices (NOTE: needs to be verified every time the system is booted, and then modified here if required, use get_audio_devices.py to get the indices)
+SPEAKER_DEVICE_INDEX = 25 # default output device (after pavucontrol volume setup)
 MIC_DEVICE_INDEX = 0
 
 # human confirmation behavior in door coordinator
@@ -81,6 +75,6 @@ USE_VOICE_CONFIRMATION = True
 VOICE_CONFIRMATION_TIMEOUT_SEC = 7.0 # seconds
 VOICE_CONFIRMATION_MAX_TRIES = 2 # max tries for voice confirmation
 HUMAN_CONFIRMATION_COOLDOWN_SEC = 8.0 # seconds
-# Give up on the door after this many unsuccessful confirmation cycles so the
+# give up on the door after this many unsuccessful confirmation cycles so the
 # coordinator can never get stuck indefinitely at a closed door.
 MAX_HUMAN_CONFIRMATION_CYCLES = 6

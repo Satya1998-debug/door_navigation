@@ -9,11 +9,6 @@ This node subscribes to synchronized RGB-D images and performs:
 Publishes:
 - /door/detections: Individual door detections with bounding boxes
 - /door/poses: Door 3D poses in map frame
-
-Benefits:
-- Perfect RGB-D synchronization (same images for detection and pose)
-- Lower latency (no cross-node message passing)
-- More efficient (single image processing pipeline)
 """
 
 import os
@@ -33,7 +28,7 @@ import message_filters
 import cv2
 import threading
 
-# Path setup
+# path setup
 import rospkg
 rospack = rospkg.RosPack()
 PACKAGE_PATH = rospack.get_path('door_navigation')
@@ -80,11 +75,11 @@ class DoorDetectionAndPoseNode:
         self.camera_frame_id = CAM_OPTICAL_FRAME
         self.camera_info_sub = rospy.Subscriber(CAMERA_INFO_TOPIC,CameraInfo, self.camera_info_callback,queue_size=1)
         
-        # Door detector (YOLO + depth processing)
+        # door detector (YOLO + depth processing)
         self.door_detector = get_door_detector_instance() # preloaded models are already handled
         self.bridge = CvBridge()
         
-        # TF for camera->map transform
+        # TF for camera->map transform (for pose estimation)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         
@@ -95,7 +90,7 @@ class DoorDetectionAndPoseNode:
         self.latest_depth_frame = None
         self.frame_lock = threading.Lock()
         
-        # Detection rate control
+        # detection rate control
         self.last_detection_time = rospy.Time.now()
         
         # standard 640×480 RGB image is about 0.9 MB., so buff_size is set to 4 MB to avoid dropping frames (to hold 1-2 images only)
@@ -157,7 +152,7 @@ class DoorDetectionAndPoseNode:
         point.z = float(z)
         return point
 
-    def publish_pose_markers(self, pose_array):
+    def publish_pose_markers(self, pose_array): # USED only while debugging
         if pose_array is None or len(pose_array.doors) == 0:
             return
 
@@ -297,6 +292,10 @@ class DoorDetectionAndPoseNode:
         self.marker_pub.publish(marker_array)
     
     def rgbd_callback(self, rgb_msg, depth_msg):
+        """
+        Callback for synchronized RGB and Depth images.
+        Performs detection and pose estimation on the same image pair.
+        """
         time_diff = abs((rgb_msg.header.stamp - depth_msg.header.stamp).to_sec())
         rospy.loginfo_throttle(5.0, f"RGB-Depth sync dt={time_diff:.3f}s")
             
@@ -308,8 +307,8 @@ class DoorDetectionAndPoseNode:
         # if cv_depth_image.dtype == np.float32 or cv_depth_image.dtype == np.float64:
         cv_depth_image = cv_depth_image.astype(np.float32) / 1000.0 # convert to meters (always need to be in meters)
             
-        # Verify synchronization
-        if time_diff > 0.05:  # 50ms threshold
+        # verify synchronization
+        if time_diff > 0.05:  # 50ms threshold (max allowed time difference)
             rospy.logwarn(f"RGB-Depth time mismatch: {time_diff*1000:.1f}ms")
 
         with self.frame_lock:
@@ -319,7 +318,7 @@ class DoorDetectionAndPoseNode:
             
         rospy.loginfo_throttle(5.0, f"Processing synchronized RGBD at {rgb_msg.header.stamp.to_sec():.3f}")
             
-    def rgbd_callback_old(self, rgb_msg, depth_msg):
+    def rgbd_callback_old(self, rgb_msg, depth_msg): # OLD callback, not used anymore
         """
         Callback for synchronized RGB and Depth images.
         Performs detection and pose estimation on the same image pair.
@@ -438,7 +437,9 @@ class DoorDetectionAndPoseNode:
             rospy.logwarn(f"Failed to publish detection: {e}")
     
     def visualize_debug(self, rgb, detections, depth_final):
-        
+        """
+        Visualize detection and pose estimation results.
+        """
         def normalize_depth_for_display(depth_m):
             if depth_m is None:
                 return None
@@ -509,7 +510,7 @@ class DoorDetectionAndPoseNode:
         falls back to the latest available transform via rospy.Time(0).
         Returns the TransformStamped, or None if no TF is available at all.
         """
-        # Fast attempt at the image stamp
+        # fast attempt at the image stamp
         if stamp is not None:
             try:
                 return self.tf_buffer.lookup_transform(
@@ -520,7 +521,7 @@ class DoorDetectionAndPoseNode:
                     tf2_ros.ConnectivityException):
                 pass
 
-        # Fallback: latest available transform (handles persistent TF lag)
+        # fallback: latest available transform (handles persistent TF lag)
         try:
             tf_latest = self.tf_buffer.lookup_transform(
                 MAP_FRAME, self.camera_frame_id, rospy.Time(0), rospy.Duration(0.1)
@@ -542,14 +543,14 @@ class DoorDetectionAndPoseNode:
         Uses the SAME rgb_image and depth_image that detection was performed on.
         """
         try:
-            # Get door type
+            # get door type
             cls_id = int(detection['cls_id'])
             door_type = LABEL_MAP.get(cls_id, 'door_single')
             
-            # Create door box dict (required format for pose estimator)
+            # create door box dict (required format for pose estimator)
             door_box_dict = {"bbox": detection['bbox']}
             
-            # Compute 3D pose in camera frame, does all plane fitting, RANSAC, normal calculations, internally
+            # compute 3D pose in camera frame, does all plane fitting, RANSAC, normal calculations, internally
             # door centre (x, y, z) in camera frame (camera_color_optical_frame), normal vector (x, y, z), door width in meters
             t0 = time.time()
             door_centre_cam, normal_vector_cam, door_width = compute_door_3d_pose_from_detection(
@@ -572,7 +573,7 @@ class DoorDetectionAndPoseNode:
                 rospy.loginfo(f"Skipping pose at {distance:.2f}m (> {self.max_pose_radius_m:.2f}m)")
                 return None
             
-            # Transform to map frame (reuse per-frame TF lookup when provided)
+            # transform to map frame (reuse per-frame TF lookup when provided)
             door_pose_map = self.transform_camera_to_map(
                 door_centre_cam, normal_vector_cam, stamp,
                 tf_cam_to_map=tf_cam_to_map,
@@ -612,7 +613,7 @@ class DoorDetectionAndPoseNode:
         """
         try:
             if tf_cam_to_map is None:
-                # Backward-compatible fallback: lookup at image stamp
+                # backward-compatible fallback: lookup at image stamp
                 tf_cam_to_map = self.tf_buffer.lookup_transform(
                     MAP_FRAME, # map
                     self.camera_frame_id, # camera_color_optical_frame
@@ -621,7 +622,7 @@ class DoorDetectionAndPoseNode:
                 )
 
    
-            # Transform position
+            # transform position into map frame
             door_point_cam = PointStamped()
             door_point_cam.header.frame_id = self.camera_frame_id
             door_point_cam.header.stamp = stamp
@@ -634,7 +635,7 @@ class DoorDetectionAndPoseNode:
                 tf_cam_to_map
             )
             
-            # Transform normal vector
+            # transform normal vector into map frame
             normal_stamped = Vector3Stamped()
             normal_stamped.header.frame_id = self.camera_frame_id
             normal_stamped.vector.x = door_normal_cam[0]
@@ -646,7 +647,7 @@ class DoorDetectionAndPoseNode:
                 tf_cam_to_map
             )
             
-            # Normalize
+            # normalize normal vector
             normal_vec = np.array([
                 normal_map.vector.x, 
                 normal_map.vector.y, 
@@ -679,7 +680,7 @@ class DoorDetectionAndPoseNode:
             return None
 
     def spin(self):
-        rate = rospy.Rate(5)  # 5 Hz, keep identical to detection rate to avoid unnecessary processing the same frames multiple times
+        rate = rospy.Rate(5)  # 5 Hz, identical to detection rate to avoid unnecessary processing the same frames multiple times
         while not rospy.is_shutdown():
             try:
                 with self.frame_lock:
@@ -709,7 +710,7 @@ class DoorDetectionAndPoseNode:
                 rospy.loginfo(f"YOLO inference complete (dt={t1 - t0:.3f}s)")
                 rospy.loginfo(f"Detected {len(detections)} door(s)")
                 
-                # Convert depth to meters for pose estimation
+                # convert depth to meters for pose estimation
                 # depth_image_m = self.latest_depth_frame.astype(np.float32) / 1000.0
                 
                 # compute DA depth once per frame (depth frame is in meters)
@@ -722,9 +723,8 @@ class DoorDetectionAndPoseNode:
                     rospy.loginfo("No doors detected in this frame")
                     continue
 
-                # Single cam->map TF lookup per frame, shared across all detections.
-                # Falls back to latest available TF if image-stamped TF isn't ready
-                # (handles up to ~seconds of TF lag without blocking).
+                # single cam->map TF lookup per frame, shared across all detections.
+                # fallback to latest available TF if image-stamped TF isn't ready
                 tf_cam_to_map = self.lookup_cam_to_map_tf(stamp)
                 if tf_cam_to_map is None:
                     rospy.logwarn_throttle(2.0,
@@ -734,10 +734,10 @@ class DoorDetectionAndPoseNode:
 
                 door_pose_msgs = []
                 for det in detections:
-                    # Publish detection (NOT NEEDED now, as we are publishing poses directly)
+                    # publish detection (NOT NEEDED now, as we are publishing poses directly)
                     # self.publish_detection(det, rgb_msg.header.stamp)
                     
-                    # Compute 3D pose (do not publish per-door)
+                    # compute 3D pose (do not publish per-door)
                     if det.get('cls_id') in LABEL_DOORS:
                         pose_msg = self.compute_pose_message(
                             det, rgb, depth_final, stamp,
