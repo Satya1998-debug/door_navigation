@@ -130,7 +130,7 @@ class GoalManager:
             except Exception as e:
                 rospy.logwarn("Failed to resolve locations YAML from package: %s", e)
 
-        default_path = '/home/unitree/UnitreeSLAM/catkin_lidar_slam_3d/src/lidar_slam_3d/a2_ros2udp/params/locations.yaml'
+        default_path = '/home/ias/satya/catkin_ws/src/door_navigation/saved_locations_map_area_04.yaml'
         rospy.logwarn("locations_yaml falling back to legacy path: %s", default_path)
         return default_path
 

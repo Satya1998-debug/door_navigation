@@ -36,7 +36,7 @@ if depth_anything_v2_path not in sys.path:
 
 from utils.config import *
 from utils.depth_calibration import COEF_QUAD, apply_inverse_depth_correction
-from trt_inference_depth_anything import DepthAnythingTRT
+from utils.trt_inference_depth_anything import DepthAnythingTRT
 
 
 class RGBDImageReciever:

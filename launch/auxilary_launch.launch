@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<!--
+      1. rosbridge_websocket    (so robotdog_guide can reach ROS)
+      2. Camera + door pipeline (via door_navigation.launch)
+      3. robot_command_bridge   (exposes /agent/start_navigation)
+      4. Voice Assistant Node
+-->
+<launch>
+
+    <arg name="rosbridge_port"          default="9090"/>
+    <arg name="rosbridge_address"       default=""/>  <!-- empty => bind to all interfaces -->
+    <arg name="nav_wait_timeout_sec"    default="300"/>
+    <arg name="nav_position_tolerance"  default="0.15"/>
+
+    <!-- 1. rosbridge websocket for the LLM agent -->
+    <include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch">
+        <arg name="port"    value="$(arg rosbridge_port)"/>
+        <arg name="address" value="$(arg rosbridge_address)"/>
+    </include>
+
+    <!-- 2. Camera Node -->
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+        <arg name="initial_reset" value="true"/>
+        <arg name="depth_width" value="640"/>
+        <arg name="depth_height" value="480"/>
+        <arg name="depth_fps" value="30"/>
+        <arg name="color_width" value="640"/>
+        <arg name="color_height" value="480"/>
+        <arg name="color_fps" value="30"/>
+        <arg name="align_depth" value="true"/>
+    </include>
+
+    <!-- 3. Agent-facing service /agent/start_navigation -->
+    <!-- <node pkg="door_navigation" type="robot_command_bridge.py" name="robot_command_bridge" output="screen" required="true">
+        <param name="nav_wait_timeout_sec"   value="$(arg nav_wait_timeout_sec)"/>
+        <param name="nav_position_tolerance" value="$(arg nav_position_tolerance)"/>
+    </node> -->
+
+    <!-- 4. Voice Assistant Node -->
+    <node pkg="door_navigation" type="voice_assistant_node.py" name="voice_assistant_node" output="screen">
+        <param name="enable_listening"        value="true"/>
+        <param name="default_listen_timeout"  value="10.0"/>
+    </node>
+
+
+</launch>

@@ -63,6 +63,8 @@ add_service_files(
   FILES
   StartNavigation.srv
   EstimateDoorState.srv
+  Speak.srv
+  Listen.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -171,7 +173,7 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/robot_command_bridge.py
-  scripts/image_publisher_test.py
+  scripts/voice_assistant_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

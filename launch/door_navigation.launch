@@ -19,6 +19,17 @@
         <arg name="align_depth" value="true"/>
     </include>
 
+    <!-- Voice Assistant Node (single owner of mic/speakers/vosk/pyttsx3).
+         MUST be up before door_coordinator_node so its /voice/speak and
+         /voice/listen service proxies resolve on the first try. Every other
+         consumer (coordinator here, robotdog_guide over rosbridge) reaches
+         audio through this node instead of opening pyaudio themselves. -->
+    <node pkg="door_navigation" type="voice_assistant_node.py"
+          name="voice_assistant_node" output="screen">
+        <param name="enable_listening"        value="true"/>
+        <param name="default_listen_timeout"  value="10.0"/>
+    </node>
+
     <!-- Door Detector & Pose Estimator Node -->
     <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/>
     

@@ -27,7 +27,7 @@ USE_VLM = True  # set to False to disable VLM and use only geometric reasoning f
 # DOOR navigation parameters
 TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
 POST_DOOR_DISTANCE = 2.0  # meters after door (only used when USE_POST_DOOR_POSE=True)
-PRE_DOOR_DISTANCE = 2.0   # meters before door
+PRE_DOOR_DISTANCE = 3.5   # meters before door
 DOOR_TRIGGER_DISTANCE = 6.0  # start door logic when closer than this
 # When True, coordinator commands a short "just past the door" checkpoint
 # before resuming the original goal. Gives cleaner failure isolation and a
@@ -65,31 +65,6 @@ fx = 386.3353
 fy = 385.8988
 cx = 325.0646
 cy = 246.0962
-
-# camera parameters
-# rostopic echo -n 1 /camera/aligned_depth_to_color/camera_info
-# header: 
-#   seq: 3
-#   stamp: 
-#     secs: 1766760902
-#     nsecs: 532018423
-#   frame_id: "camera_color_optical_frame"
-# height: 480
-# width: 640
-# distortion_model: "plumb_bob"
-# D: [-0.054627396166324615, 0.06297337263822556, -0.0005539487465284765, 0.00043509574607014656, -0.019929416477680206]
-# K: [385.88861083984375, 0.0, 317.80999755859375, 0.0, 385.3906555175781, 243.65032958984375, 0.0, 0.0, 1.0]
-# R: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-# P: [385.88861083984375, 0.0, 317.80999755859375, 0.0, 0.0, 385.3906555175781, 243.65032958984375, 0.0, 0.0, 0.0, 1.0, 0.0]
-# binning_x: 0
-# binning_y: 0
-# roi: 
-#   x_offset: 0
-#   y_offset: 0
-#   height: 0
-#   width: 0
-#   do_rectify: False
-# ---
 
 # speech recognition model
 SPEECH_RECOGNITION_MODEL = "vosk-model-en-us-0.22" # "vosk-model-small-en-us-0.15" # "vosk-model-en-us-0.22"

@@ -1,0 +1,8 @@
+# Request the voice_assistant node to speak `text`.
+# blocking=true  -> service returns after the utterance is fully spoken.
+# blocking=false -> utterance is enqueued and service returns immediately.
+string text
+bool blocking
+---
+bool success
+string message

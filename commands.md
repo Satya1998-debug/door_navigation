@@ -188,7 +188,12 @@ rostopic echo /door_coordinator/door_on_path
 ### Voice assistant (optional)
 
 ```bash
-rosrun door_navigation voice_assistant.py
+rosrun door_navigation voice_assistant.py # run node
+```
+
+```bash
+rosservice call /voice/speak "{text: 'hello testing voice service', blocking: true}"  # speak
+rosservice call /voice/listen "{timeout_sec: 8.0, grammar: ''}"  # listen
 ```
 
 ## 7. Robot command bridge (agent-facing services)

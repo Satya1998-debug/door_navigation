@@ -178,7 +178,7 @@ class DoorCoordinator:
         self.voice_assistant = None
         if self.use_voice_assistant:
             try:
-                self.voice_assistant = get_voice_assistant(enable_listening=True)
+                self.voice_assistant = get_voice_assistant(enable_listening=True, use_ros_service=True)
                 rospy.loginfo("Voice assistant ready for door coordinator announcements")
             except Exception as e:
                 rospy.logwarn(f"Voice assistant unavailable, continuing without speech: {e}")
@@ -394,16 +394,16 @@ class DoorCoordinator:
         bigrams = set(zip(tokens, tokens[1:]))
 
         # explicit negations
-        if token_set & set(self._NO_TOKENS):
+        if token_set & set(_NO_TOKENS):
             return "no"
         # negated positive ("not sure", "don't proceed", ...)
         for prev, cur in bigrams:
-            if prev in ("not", "don't", "dont", "no") and cur in self._YES_TOKENS:
+            if prev in ("not", "don't", "dont", "no") and cur in _YES_TOKENS:
                 return "no"
         # explicit positives
-        if token_set & set(self._YES_TOKENS):
+        if token_set & set(_YES_TOKENS):
             return "yes"
-        if bigrams & set(self._YES_BIGRAMS):
+        if bigrams & set(_YES_BIGRAMS):
             return "yes"
         return "unknown"
 

@@ -1,0 +1,8 @@
+# Ask the voice_assistant node for the next finalized ASR utterance.
+# timeout_sec  -> max seconds to wait for an utterance (0 or negative -> node default).
+# grammar      -> optional JSON vocab list. Empty string means free-form.
+float32 timeout_sec
+string grammar
+---
+string text
+bool timed_out

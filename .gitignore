@@ -30,3 +30,7 @@ scripts/utils/speech_model/
 
 # speech output
 scripts/output/
+
+
+# master thesis files
+scripts/IAS_thesis_draft
