@@ -254,8 +254,7 @@ class DoorDetector:
                 try:
                     cv2.imshow("Test Image Detections", color_image)
                     # handle cv2 events and check for ESC key to exit
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
+                    cv2.waitKey(1)
                 except Exception as viz_error:
                     print(f"Visualization skipped (no GUI support): {viz_error}")
 

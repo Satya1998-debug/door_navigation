@@ -113,7 +113,7 @@ def fit_plane(points_3d, ply_file_name=""):
         traceback.print_exc()
         return None, None, None
 
-def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visualize=False):
+def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visualize=False, intrinsics=None):
     try:
         print("Fitting wall plane for safer normal vector...")
             
@@ -129,7 +129,7 @@ def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             
         # fit wall plane
         x1_o, y1_o, _, _ = outer_bbox
-        points_3d_wall = project_to_3d(x1_o, y1_o, valid_mask=exp_mask, depth=full_depth)
+        points_3d_wall = project_to_3d(x1_o, y1_o, valid_mask=exp_mask, depth=full_depth, intrinsics=intrinsics)
         wall_inliers, wall_normal, _ = fit_plane(points_3d_wall, "")
         
         if wall_normal is not None:
@@ -148,7 +148,7 @@ def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             width = x2 - x1
             height = y2 - y1
             roi_depth = full_depth[int(y1):int(y1+height), int(x1):int(x1+width)]
-            points_3d_door = project_to_3d(x1, y1, roi_depth)
+            points_3d_door = project_to_3d(x1, y1, roi_depth, intrinsics=intrinsics)
             door_inliers, door_normal, _ = fit_plane(points_3d_door, "")
             if door_normal is not None:
                 print(f"[Single Door] Using door normal for pre-pose: [{door_normal[0]:.3f}, {door_normal[1]:.3f}, {door_normal[2]:.3f}]")
@@ -170,7 +170,7 @@ def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
         print(f"Error in get_normal_vector_single_door: {e}")
         return None, None, None
 
-def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visualize=False):
+def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visualize=False, intrinsics=None):
     try:
         # For double doors, use angle bisector of left and right door normals
         print("[Double Door] Computing angle bisector of left and right door normals...")
@@ -195,7 +195,7 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
         if visualize: # visualize ROI
             visualize_roi(rgb_image, left_bbox, roi_depth_l, disp_text="double-left-door")
 
-        points_3d_l = project_to_3d(int(l_x1), int(l_y1), depth=roi_depth_l)
+        points_3d_l = project_to_3d(int(l_x1), int(l_y1), depth=roi_depth_l, intrinsics=intrinsics)
         l_inliers, l_door_n, _ = fit_plane(points_3d_l, "")
 
         if visualize:
@@ -212,7 +212,7 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
         if visualize: # visualize ROI
             visualize_roi(rgb_image, right_bbox, roi_depth_r, disp_text="double-right-door")
 
-        points_3d_r = project_to_3d(int(r_x1), int(r_y1), depth=roi_depth_r)
+        points_3d_r = project_to_3d(int(r_x1), int(r_y1), depth=roi_depth_r, intrinsics=intrinsics)
         r_inliers, r_door_n, _ = fit_plane(points_3d_r, "")
         
         if visualize:
@@ -319,7 +319,7 @@ def compute_da_depth(use_da, door_detector, rgb_image, depth_image_rs):
     
 
 def compute_door_3d_pose_from_detection(rgb_image, depth_final, door_box, 
-                                        door_type='door_single', visualize=True, use_da=False):
+                                        door_type='door_single', visualize=True, use_da=False, intrinsics=None):
     try:
         # actual bbox coordinates from detection
         bbox = door_box["bbox"]
@@ -328,9 +328,9 @@ def compute_door_3d_pose_from_detection(rgb_image, depth_final, door_box,
         # for single doors, use wall normal instead of door normal for safer navigation
         # This prevents robot from going into walls when door is partly open
         if door_type == 'door_single':
-            normal_vector, door_centre, door_width = get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, depth_final, visualize=visualize)
+            normal_vector, door_centre, door_width = get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, depth_final, visualize=visualize, intrinsics=intrinsics)
         else: # for double doors, use angle bisector of left and right door normals
-            normal_vector, door_centre, door_width = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_final, visualize=visualize)
+            normal_vector, door_centre, door_width = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_final, visualize=visualize, intrinsics=intrinsics)
         
         return door_centre, normal_vector, door_width # door centre (x, y, z) in camera frame, normal vector (x, y, z), door width in meters
 

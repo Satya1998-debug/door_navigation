@@ -11,7 +11,7 @@ import rospy
 import cv2
 import numpy as np
 from cv_bridge import CvBridge
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CameraInfo, Image
 import message_filters
 import threading
 import rospkg
@@ -79,6 +79,11 @@ class DoorStateEstimatorService:
         self.latest_depth_frame = None
         self.latest_stamp = None
 
+
+        # get Intrinsics
+        self.camera_info_received = False
+        self.camera_info_sub = rospy.Subscriber("/camera/color/camera_info",CameraInfo, self.camera_info_callback,queue_size=1)
+
         self.rgb_sub = message_filters.Subscriber(self.rgb_topic, Image, queue_size=1, buff_size=2**22)
         self.depth_sub = message_filters.Subscriber(self.depth_topic, Image, queue_size=1, buff_size=2**22)
         self.ts = message_filters.ApproximateTimeSynchronizer(
@@ -103,6 +108,21 @@ class DoorStateEstimatorService:
         rospy.loginfo(f"  Wait before estimate: {self.wait_before_estimate} s")
         rospy.loginfo(f"Service available at: /door/estimate_state")
 
+    def camera_info_callback(self, msg):
+        if self.camera_info_received:
+            return
+
+        self.intrinsics = {
+            'FX': msg.K[0],
+            'FY': msg.K[4],
+            'CX': msg.K[2],
+            'CY': msg.K[5]
+        }
+
+        self.camera_info_received = True
+        rospy.loginfo("Camera intrinsics received")
+        self.camera_info_sub.unregister()
+    
     def rgbd_callback(self, rgb_msg, depth_msg):
         """Cache latest synchronized RGB-D frames"""
         try:
@@ -245,11 +265,11 @@ class DoorStateEstimatorService:
             if door_type == "door_double":
                 rospy.loginfo("Estimating double door state (re-detect)")
                 door_state_res = estimate_double_door_state(door_bbox, rgb_img, roi_depth, full_depth, 
-                                                        visualize=self.visualize, use_vlm=self.use_vlm)
+                                                        visualize=self.visualize, use_vlm=self.use_vlm, intrinsics=self.intrinsics)
             else:
                 rospy.loginfo("Estimating single door state (re-detect)")
                 door_state_res = estimate_single_door_state(door_bbox, rgb_img, roi_depth, full_depth, 
-                                                        visualize=self.visualize, use_vlm=self.use_vlm)
+                                                        visualize=self.visualize, use_vlm=self.use_vlm, intrinsics=self.intrinsics)
             t5 = time.time()
             rospy.loginfo(f"State estimation complete (dt={t5 - t4:.3f}s)")
                 

@@ -12,10 +12,10 @@ except (rospkg.ResourceNotFound, rospkg.common.ResourceNotFound):
 
 # ROS topics (image)
 RGB_TOPIC = '/camera/color/image_raw'
-DEPTH_TOPIC = '/camera/aligned_depth_to_color/image_raw'
-RGB_ROS_MSG_TYPE = 'sensor_msgs/Image'
-DEPTH_ROS_MSG_TYPE = 'sensor_msgs/Image'
+DEPTH_TOPIC = '/camera/aligned_depth_to_color/image_raw' # depth not used so far
 CAMERA_INFO_TOPIC = '/camera/color/camera_info'
+CAM_OPTICAL_FRAME = "camera_color_optical_frame"
+MAP_FRAME = "map"
 
 # ROS topics (detection)
 DOOR_DETECTION_TOPIC = "/door_detections"
@@ -37,7 +37,7 @@ LABEL_DOORS = [0, 1]  # class ids for doors
 MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.engine')  # path to door detection model # last_yolo8m.pt
 DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.json')  # path to save detection results
 CONFIDENCE_THRESHOLD = 0.8
-DETECTION_RATE = 6  # Hz (should be more than image publish rate to avoid missing frames)
+DETECTION_RATE = 5  # Hz (should be more than image publish rate to avoid missing frames)
 IMG_SIZE = 640  # input image size for the model
 IMG_DIM = (640, 480)  # original image dimensions (width, height)
 DEPTH_ANYTHING_V2_PATH = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_metric_hypersim_vits.pth')  # path to depth anything v2 model
@@ -48,6 +48,12 @@ FX = 385.88861083984375
 FY = 385.3906555175781
 CX = 317.80999755859375
 CY = 243.65032958984375
+
+
+fx = 386.3353
+fy = 385.8988
+cx = 325.0646
+cy = 246.0962
 
 # camera parameters
 # rostopic echo -n 1 /camera/aligned_depth_to_color/camera_info

@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-from utils.config import CX, FX, CY, FY
+# from utils.config import CX, FX, CY, FY
 
 def crop_to_bbox_depth(img, door_box):
     if img is None:
@@ -110,7 +110,7 @@ def ring_mask(img_width, img_height, inner_bbox, outer_bbox, visualize_mask=Fals
     mask[y1:y2, x1:x2] = False # inner box
     return mask
 
-def project_to_3d(x1, y1, valid_mask=None, depth=None, FX=FX, FY=FY, CX=CX, CY=CY):
+def project_to_3d(x1, y1, valid_mask=None, depth=None, intrinsics=None):
     # x1, y1: top-left corner of ROI in full image coordinates
     try:
         if depth is None:
@@ -130,8 +130,8 @@ def project_to_3d(x1, y1, valid_mask=None, depth=None, FX=FX, FY=FY, CX=CX, CY=C
         # convert to full image coordinates
         u = xs + x1
         v = ys + y1
-        X = (u - CX) * Z / FX
-        Y = (v - CY) * Z / FY
+        X = (u - intrinsics['CX']) * Z / intrinsics['FX']
+        Y = (v - intrinsics['CY']) * Z / intrinsics['FY']
         points_3d = np.stack([X, Y, Z], axis=1)  # (N,3) meters
         return points_3d
     except Exception as e:

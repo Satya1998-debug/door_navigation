@@ -2,10 +2,10 @@
 <launch>
 
     <!-- Fake TF for offline testing -->
-    <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_camera_link"
+    <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_camera_link"
           args="0 0 0 0 0 0 map camera_link" />
     <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_base_link"
-          args="0 0 0 0 0 0 map base_link" />
+          args="0 0 0 0 0 0 map base_link" /> -->
     
     <!-- Door Detector & Pose Estimator Node -->
     <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/>

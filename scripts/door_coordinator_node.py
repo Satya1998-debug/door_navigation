@@ -21,6 +21,8 @@ from tf.transformations import quaternion_from_euler
 
 import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
 
 # Path setup
 import rospkg
@@ -62,10 +64,13 @@ class DoorCoordinator:
         self.voice_confirmation_max_tries = VOICE_CONFIRMATION_MAX_TRIES
         self.human_confirmation_cooldown_sec = HUMAN_CONFIRMATION_COOLDOWN_SEC
         self.last_human_confirmation_prompt_ts = 0.0
+        self.marker_topic = "/door_pose_markers"
         
         # TF listerner setup
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+
+        self.marker_pub = rospy.Publisher(self.marker_topic, MarkerArray, queue_size=1)
         
         # subscribe to door poses (from door_pose_estimator_node)
         rospy.Subscriber(DOOR_POSE_TOPIC, DoorPoseArray, self.door_pose_callback, queue_size=10)
@@ -130,6 +135,99 @@ class DoorCoordinator:
 
         # Keep only the latest snapshot to represent the world state for this frame
         self.latest_door_poses = snapshot
+        # self.publish_door_pose_markers(snapshot, msg.header.stamp)
+
+    def _make_point(self, x, y, z):
+        point = Point()
+        point.x = float(x)
+        point.y = float(y)
+        point.z = float(z)
+        return point
+
+    def publish_door_pose_markers(self, door_poses, stamp):
+        marker_array = MarkerArray()
+
+        delete_marker = Marker()
+        delete_marker.action = Marker.DELETEALL
+        marker_array.markers.append(delete_marker)
+
+        for index, door_pose in enumerate(door_poses):
+            position = door_pose["position"]
+            normal = door_pose["normal"]
+            door_width = float(door_pose.get("width", 0.9) or 0.9)
+
+            center_marker = Marker()
+            center_marker.header.frame_id = "map"
+            center_marker.header.stamp = stamp
+            center_marker.ns = "door_center"
+            center_marker.id = index * 3
+            center_marker.type = Marker.SPHERE
+            center_marker.action = Marker.ADD
+            center_marker.pose.position.x = float(position[0])
+            center_marker.pose.position.y = float(position[1])
+            center_marker.pose.position.z = float(position[2])
+            center_marker.pose.orientation.w = 1.0
+            center_marker.scale.x = 0.18
+            center_marker.scale.x = 0.40
+            center_marker.scale.y = 0.40
+            center_marker.scale.z = 0.40
+            center_marker.scale.z = 0.18
+            center_marker.color.r = 0.1
+            center_marker.color.g = 0.9
+            center_marker.color.b = 0.1
+            center_marker.color.a = 1.0
+            center_marker.lifetime = rospy.Duration(0)
+            marker_array.markers.append(center_marker)
+
+            normal_marker = Marker()
+            normal_marker.header.frame_id = "map"
+            normal_marker.header.stamp = stamp
+            normal_marker.ns = "door_normal"
+            normal_marker.id = index * 3 + 1
+            normal_marker.type = Marker.LINE_STRIP
+            normal_marker.action = Marker.ADD
+            normal_marker.scale.x = 0.08
+            normal_marker.color.r = 1.0
+            normal_marker.color.g = 0.2
+            normal_marker.color.b = 0.2
+            normal_marker.color.a = 1.0
+            normal_marker.lifetime = rospy.Duration(0)
+            normal_marker.points = [
+                self._make_point(position[0], position[1], position[2]),
+                self._make_point(
+                    position[0] + normal[0] * max(door_width, 1.0),
+                    position[1] + normal[1] * max(door_width, 0.5),
+                    position[2] + normal[2] * max(door_width, 0.5),
+                ),
+            ]
+            marker_array.markers.append(normal_marker)
+
+            pre_goal_x = position[0] + normal[0] * self.pre_door_distance
+            pre_goal_y = position[1] + normal[1] * self.pre_door_distance
+            pre_goal_z = position[2] + normal[2] * self.pre_door_distance
+
+            pre_marker = Marker()
+            pre_marker.header.frame_id = "map"
+            pre_marker.header.stamp = stamp
+            pre_marker.ns = "pre_door_goal"
+            pre_marker.id = index * 3 + 2
+            pre_marker.type = Marker.SPHERE
+            pre_marker.action = Marker.ADD
+            pre_marker.pose.position.x = float(pre_goal_x)
+            pre_marker.pose.position.y = float(pre_goal_y)
+            pre_marker.pose.position.z = float(pre_goal_z)
+            pre_marker.pose.orientation.w = 1.0
+            pre_marker.scale.x = 0.30
+            pre_marker.scale.y = 0.30
+            pre_marker.scale.z = 0.30
+            pre_marker.color.r = 0.1
+            pre_marker.color.g = 0.3
+            pre_marker.color.b = 1.0
+            pre_marker.color.a = 1.0
+            pre_marker.lifetime = rospy.Duration(0)
+            marker_array.markers.append(pre_marker)
+
+        self.marker_pub.publish(marker_array)
     
     def plan_callback(self, msg):
         self.current_plan = msg

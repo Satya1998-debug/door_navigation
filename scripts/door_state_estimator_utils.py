@@ -32,10 +32,10 @@ from door_pose_estimator_utils import fit_plane, project_to_3d, visualize_plane_
 from utils.visualization import visualize_door_passability, visualize_roi
 from utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
 
-FX = 385.88861083984375
-FY = 385.3906555175781
-CX = 317.80999755859375
-CY = 243.65032958984375
+# FX = 385.88861083984375
+# FY = 385.3906555175781
+# CX = 317.80999755859375
+# CY = 243.65032958984375
 
 ROBOT_WIDTH = 0.5  # in meters, robot width for door pass check
 EXPANSION_RATIO = 0.2  # ratio to expand door bbox for wall plane fitting
@@ -191,7 +191,7 @@ def calculate_door_state_double(angle_deg,
 def is_door_passable(depth, bbox, FX, CX, 
                      robot_width=ROBOT_WIDTH, safety_margin=SAFETY_MARGIN_WIDTH, 
                      depth_slab_thickness=SLAB_THICKNESS, stride=2, min_points=MIN_POINTS_PASS_CHECK,
-                     visualize=False, visualize_3d=False):
+                     visualize=False, visualize_3d=False, intrinsics=None):
     
     x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
 
@@ -225,12 +225,12 @@ def is_door_passable(depth, bbox, FX, CX,
     print(f"Valid points in slab: {len(slab_xv)} / {len(z)} total valid points")
 
     # convert to 3D points, slab 3D points
-    X = (slab_xv - CX) * slab_z / FX
-    Y = (slab_yv - CY) * slab_z / FY  # Using CY and FY
-    
+    X = (slab_xv - intrinsics['CX']) * slab_z / intrinsics['FX']  # Using CX and FX
+    Y = (slab_yv - intrinsics['CY']) * slab_z / intrinsics['FY']  # Using CY and FY
+
     # All valid points in 3D
-    X_all = (xv_valid - CX) * z / FX
-    Y_all = (yv_valid - CY) * z / FY
+    X_all = (xv_valid - intrinsics['CX']) * z / intrinsics['FX']
+    Y_all = (yv_valid - intrinsics['CY']) * z / intrinsics['FY']
 
     # gap based passibility
     num_bins = 30  # tuneable
@@ -275,7 +275,7 @@ def is_door_passable(depth, bbox, FX, CX,
     
     return passable
 
-def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visualize=True, use_vlm=False):
+def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visualize=True, use_vlm=False, intrinsics=None):
     try:
         # get bbox coordinates (also the inner bbox for wall fitting)
         if len(door_bbox) == 0:
@@ -302,7 +302,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         
         # fit plane for door
         s_time = time.time()
-        points_3d_door = project_to_3d(x1, y1, valid_mask=None, depth=roi_depth)
+        points_3d_door = project_to_3d(x1, y1, valid_mask=None, depth=roi_depth, intrinsics=intrinsics)
         door_inliers, door_n, _ = fit_plane(points_3d_door, "singledoor_roi_plane-door")
         if door_n is None or door_inliers is None:
             print("Door plane fit failed")
@@ -314,7 +314,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
 
         # fit wall plane
         x1_o, y1_o, _, _ = outer_bbox
-        points_3d_wall = project_to_3d(x1_o, y1_o, valid_mask=exp_mask, depth=full_depth)
+        points_3d_wall = project_to_3d(x1_o, y1_o, valid_mask=exp_mask, depth=full_depth, intrinsics=intrinsics)
         wall_inliers, wall_n, _ = fit_plane(points_3d_wall, "singledoor_roi_plane-wall")
         if wall_n is None or wall_inliers is None:
             print("Wall plane fit failed")
@@ -331,7 +331,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
 
         # door pass check
         s_time = time.time()
-        is_passable = is_door_passable(full_depth, door_bbox, FX, CX, visualize=visualize, visualize_3d=visualize)
+        is_passable = is_door_passable(full_depth, door_bbox, intrinsics['FX'], intrinsics['CX'], visualize=visualize, visualize_3d=visualize)
         print(f"Door passability check time: {time.time() - s_time:.2f} seconds")
         # door state, open percent (NOTE: geometrically to take decision)
         door_state, door_open_percent = calculate_door_state_single(door_opening_angle)
@@ -358,7 +358,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         print(f"Error in estimate_single_door_state: {e}")
         return None
 
-def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visualize=True, use_vlm=False):
+def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visualize=True, use_vlm=False, intrinsics=None):
     try:
 
         if len(door_bbox) == 0:
@@ -383,7 +383,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
 
         # fit plane for left door
         s_time = time.time()
-        points_3d_door_left = project_to_3d(left_bbox[0], left_bbox[1], valid_mask=None, depth=roi_depth)
+        points_3d_door_left = project_to_3d(left_bbox[0], left_bbox[1], valid_mask=None, depth=roi_depth, intrinsics=intrinsics)
         door_l_inliners, door_l_n, _ = fit_plane(points_3d_door_left)
         if door_l_n is None or door_l_inliners is None:
             print("Left door plane fit failed")
@@ -392,7 +392,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
             visualize_plane_with_normal(door_l_inliners, normal_vector=door_l_n, disp_text="double-left-door")
 
         # fit plane for right door
-        points_3d_door_right = project_to_3d(right_bbox[0], right_bbox[1], valid_mask=None, depth=roi_depth)
+        points_3d_door_right = project_to_3d(right_bbox[0], right_bbox[1], valid_mask=None, depth=roi_depth, intrinsics=intrinsics)
         door_r_inliners, door_r_n, _ = fit_plane(points_3d_door_right)
         if door_r_n is None or door_r_inliners is None:
             print("Right door plane fit failed")
@@ -407,7 +407,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
 
         # door pass check
         s_time = time.time()
-        is_passable = is_door_passable(full_depth, door_bbox, FX, CX, visualize=visualize, visualize_3d=visualize)
+        is_passable = is_door_passable(full_depth, door_bbox, intrinsics['FX'], intrinsics['CX'], visualize=visualize, visualize_3d=visualize)
         print(f"Door passability check time: {time.time() - s_time:.2f} seconds")
         # door state, open percent (NOTE: geometrically to take decision)
         door_state = calculate_door_state_double(side_doors_angle, is_passable=is_passable)
@@ -431,7 +431,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         print(f"Error in estimate_double_door_state: {e}")
         return None
 
-def estimate_door_state_test(img_path, depth_path, visualize=True, use_vlm=False):
+def estimate_door_state_test(img_path, depth_path, visualize=True, use_vlm=False, intrinsics=None):
     # NOTE: this is executed at the Pre-Pose stage, before robot moves through the door
     try:
         # loads RGB 
@@ -469,7 +469,7 @@ def estimate_door_state_test(img_path, depth_path, visualize=True, use_vlm=False
         if door_type == 'door_single':
             door_state = estimate_single_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, 
                                                     full_depth, visualize=visualize, 
-                                                    use_vlm=use_vlm)
+                                                    use_vlm=use_vlm, intrinsics=intrinsics)
             print(f"Estimated single door state: {door_state}")
             return door_state
 
@@ -477,7 +477,7 @@ def estimate_door_state_test(img_path, depth_path, visualize=True, use_vlm=False
         elif door_type == 'door_double':
             door_state = estimate_double_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, 
                                                     full_depth, visualize=visualize, 
-                                                    use_vlm=use_vlm)
+                                                    use_vlm=use_vlm, intrinsics=intrinsics)
             print(f"Estimated double door state: {door_state}")
             return door_state
         else:
