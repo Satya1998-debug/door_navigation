@@ -1,6 +1,6 @@
 # checkpoints
-checkpoints/
-weights/
+# checkpoints/
+# weights/
 
 # images for test
 scripts/data
