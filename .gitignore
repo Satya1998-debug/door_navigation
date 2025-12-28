@@ -1,0 +1,12 @@
+# checkpoints
+checkpoints/
+weights/
+
+# images for test
+scripts/data
+scripts/data_new
+
+# cloned repositories
+src/door_navigation/py_packages/*
+src/door_navigation/__pycache__
+
