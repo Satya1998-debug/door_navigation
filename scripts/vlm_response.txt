@@ -22,7 +22,7 @@ image-19 (solid,closed):       {"door_state": "closed"}
 image-27 (glass,closed):       {"door_state": "closed"}
 image-35 (glass,partly open):  {"door_state": "open"} .... it has to be partially open
 
-# qwen3vl-4b (thinking is enable, able to identify glass doors and also double doors)
+# qwen3vl-4b (thinking is enable, able to identify glass doors and also double doors) ####### USE this
 image-19 (solid,closed):       {"door_state": "closed"}
 image-27 (glass,closed):       {"door_state": "closed"}
 image-35 (glass,partly open):  {"door_state": "partially-open"} .... perfect
