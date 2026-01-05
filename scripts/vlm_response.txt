@@ -1,0 +1,33 @@
+Prompt: classify door state as open/closed/partially-open in json format.
+
+# models used
+qwen2.5vl:3b    fb90415cde1e    3.2 GB    34 seconds ago        
+qwen3-vl:4b     1343d82ebee3    3.3 GB    38 seconds ago        
+qwen3-vl:8b     901cae732162    6.1 GB    About a minute ago    
+qwen2.5vl:7b    5ced39dfa4ba    6.0 GB    About a minute ago    
+llava:7b        8dd30f6b0cb1    4.7 GB    3 minutes ago 
+
+# llava7b
+image-19 (solid,closed):       {"door_state": "closed"}
+image-27 (glass,closed):       {"door_state": "closed"}
+image-35 (glass,partly open):  {"door_state": "closed"}  ... it has to be partly open
+
+# qwen2.5vl-3b
+image-19 (solid,closed):       {"door_state": "closed"}
+image-27 (glass,closed):       {"door_state": "closed"}
+image-35 (glass,partly open):  {"door_state": "closed"} ... it has to be partly open
+
+# qwen2.5vl-7b
+image-19 (solid,closed):       {"door_state": "closed"}
+image-27 (glass,closed):       {"door_state": "closed"}
+image-35 (glass,partly open):  {"door_state": "open"} .... it has to be partially open
+
+# qwen3vl-4b (thinking is enable, able to identify glass doors and also double doors)
+image-19 (solid,closed):       {"door_state": "closed"}
+image-27 (glass,closed):       {"door_state": "closed"}
+image-35 (glass,partly open):  {"door_state": "partially-open"} .... perfect
+
+# qwen3vl-8b (better thinking)
+image-19 (solid,closed):       {"door_state": "closed"}
+image-27 (glass,closed):       {"door_state": "closed"}
+image-35 (glass,partly open):  {"door_state": "partially-open"} .... perfect
