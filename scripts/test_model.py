@@ -11,6 +11,9 @@ import torch
 from PIL import Image
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 import rospkg
+# from config import LABEL_MAP
+
+LABEL_MAP = {0: 'door', 1: 'handle'}
 
 # Get package path using rospkg (works with rosrun)
 rospack = rospkg.RosPack()
@@ -40,15 +43,15 @@ if depth_anything_v3_path not in sys.path:
 DEPTH_CORRECTION_POLY = [0.054848948720128736, -0.7970283765287229, 2.252882064094957]
 
 # IMAGE_PATH = os.path.join(PACKAGE_PATH, 'scripts/data/latest_image_color_11.jpg')
-IMAGE_PATH = os.path.join(PACKAGE_PATH, 'scripts/training_data/latest_image_color_lab_17.jpg')
+IMAGE_PATH = os.path.join(PACKAGE_PATH, 'scripts/data_new/latest_image_color_lab_35.jpg')
 
 # detector parameters
-MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights/last_yolo8m.pt')
+MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights/last_yolo11m_ias12.pt')
 CONFIDENCE_THRESHOLD = 0.5
 IMG_SIZE = 640  # input image size for the model
 DOOR_DETECTION_TOPIC = "/door_detections"  # assuming door class id is 0 in the model
 
-label_map = {0: 'door', 1: 'handle'}
+
 
 def apply_depth_correction(depth_raw, method='polynomial'):
     """
@@ -81,7 +84,7 @@ def apply_depth_correction(depth_raw, method='polynomial'):
         print("Warning: No calibration applied. Run calibration first or use 'offset'/'linear' method.")
         return depth_raw
 
-def test_model_yolo():
+def run_yolo_model():
     try:
 
         # load the model
@@ -126,7 +129,7 @@ def test_model_yolo():
             })
 
         # write detections to json file
-        with open(os.path.join(PACKAGE_PATH, 'scripts/data/detections.json'), 'w') as f:
+        with open(os.path.join(PACKAGE_PATH, 'scripts/detections.json'), 'w') as f:
             import json
             json.dump(detections, f, indent=4)
 
@@ -136,7 +139,7 @@ def test_model_yolo():
             conf = vb['conf']
             cls_id = vb['cls_id']
             cv2.rectangle(color_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"{label_map.get(cls_id, 'Unknown')} {conf:.2f}"
+            label = f"{LABEL_MAP.get(cls_id, 'Unknown')} {conf:.2f}"
             cv2.putText(color_image, label, (x1, y1 - 10), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             
@@ -320,7 +323,7 @@ def depth_anything_v2_metric(compare_with_realsense=False, img_path_given=False,
         depth_image_path = IMAGE_PATH.replace('color', 'depth').replace('.jpg', '.png')
         realsense_depth_raw = cv2.imread(depth_image_path, cv2.IMREAD_UNCHANGED)
         if realsense_depth_raw is not None:
-            # Convert RealSense depth from mm to meters
+            # Convert RealSense depth from mm to meters, default of realsense is uint16 in mm
             realsense_depth = realsense_depth_raw.astype(np.float32) / 1000.0
             print(f"\nRealSense depth loaded from: {depth_image_path}")
             print(f"RealSense depth statistics:")
@@ -477,10 +480,6 @@ def test_mode_obj_detect():
     cv2.destroyAllWindows()
 
 def analyze_depth_distribution(depth_anything_image, realsense_depth, valid_mask, difference):
-    """
-    Analyze and visualize pixel-wise depth distribution and error patterns.
-    Provides comprehensive analysis to understand systematic biases and calibration needs.
-    """
     try:
         import matplotlib
         matplotlib.use('TkAgg')  # Use TkAgg backend for better compatibility
@@ -489,7 +488,7 @@ def analyze_depth_distribution(depth_anything_image, realsense_depth, valid_mask
         print("Matplotlib not available. Install with: pip install matplotlib")
         return
     
-    # Extract valid data
+    # Extract valid data, here valid_mask is a boolean mask such that depth values > 0.1
     da_valid = depth_anything_image[valid_mask]
     rs_valid = realsense_depth[valid_mask]
     diff_valid = difference
@@ -674,16 +673,13 @@ def analyze_depth_distribution(depth_anything_image, realsense_depth, valid_mask
     print(f"  depth_corrected = (depth_anything - {intercept:.3f}) / {slope:.3f}")
     print(f"{'='*60}\n")
 
-def compare_with_depth_rgbd(depth_anything_image, realsense_depth):
-    """Compare Depth Anything V2 predictions with RealSense depth measurements"""
-    
-    # Both inputs are HxW numpy arrays in meters
+def compare_with_depth_rgbd(depth_anything_image, realsense_depth):    
+    # HxW numpy arrays in meters
     if depth_anything_image.shape != realsense_depth.shape:
         print("Depth map shapes do not match for comparison.")
         return
 
-    # Create mask for valid RealSense depths (ignore zeros)
-    valid_mask = realsense_depth > 0.1  # Ignore very small/zero depths
+    valid_mask = realsense_depth > 0.1  # ignorung very small/zero depths
     
     if np.sum(valid_mask) == 0:
         print("No valid RealSense depth values to compare.")
@@ -932,7 +928,7 @@ def test_polynomial_correction():
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    # test_model_yolo()
+    run_yolo_model()
     # test_mode_obj_detect()
     # grounding_dino_base()
     # depth_anything()  # need to do this now internet needed

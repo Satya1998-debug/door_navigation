@@ -5,7 +5,9 @@ DEPTH_ROS_MSG_TYPE = 'sensor_msgs/Image'
 CAMERA_INFO_TOPIC = '/camera/color/camera_info'
 
 # detector parameters
-MODEL_PATH = '/home/satya/MT/catkin_ws/last_yolo5l.pt'  # path to door detection model # last_yolo8m.pt
+LABEL_MAP = {0: 'door', 1: 'handle'}
+MODEL_PATH = '/home/satya/MT/catkin_ws/src/door_navigation/weights/last_yolo11m_ias12.pt'  # path to door detection model # last_yolo8m.pt
+DETECTION_JSON_PATH = '/home/satya/MT/catkin_ws/src/door_navigation/scripts/door_detections.json'  # path to save detection results
 CONFIDENCE_THRESHOLD = 0.5
 IMG_SIZE = 640  # input image size for the model
 DOOR_DETECTION_TOPIC = "/door_detections"  # assuming door class id is 0 in the model
@@ -17,7 +19,11 @@ DEPTH_MODEL = "depth_anything_v2"  # choose model for depth estimation
 # temporary
 IMAGE_PATH = ""
 
-
+# CAMERA INTRINSICS (aligned depth to color), units in pixels
+FX = 385.88861083984375
+FY = 385.3906555175781
+CX = 317.80999755859375
+CY = 243.65032958984375
 
 # camera parameters
 # rostopic echo -n 1 /camera/aligned_depth_to_color/camera_info
