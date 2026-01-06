@@ -2,6 +2,7 @@ import base64
 from os import path
 import requests
 
+ollama_base_url = "http://localhost:11434"
 
 def estimate_door_state_ollama_api(rgb_img, api_url):
     from ollama import chat
