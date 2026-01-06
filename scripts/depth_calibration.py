@@ -28,6 +28,7 @@ depth_anything_v2_path = os.path.join(py_packages_path, 'depth_anything_v2')
 if depth_anything_v2_path not in sys.path:
     sys.path.insert(0, depth_anything_v2_path)  
 
+# all calibration coefficients done for small model (vits) on indoor dataset (hypersim)
 COEF_QUAD = (0.8863810300827026, 0.9585662484169006, 0.08955039829015732)
 COEF_LINEAR = (1.9691135883331299, -0.16483189165592194)
 
@@ -108,53 +109,60 @@ def fused_depth(depth_da, depth_rs): # can be used after calibration
 
 def run_depth_anything_v2_on_image(img_dir=None, rgb_image=None):
     # img_dir = caliberation_dataset
+    try:
 
-    from depth_anything_v2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
-    
-    # Disable xformers for CPU inference (xformers requires CUDA)
-    import depth_anything_v2.metric_depth.depth_anything_v2.dinov2_layers.attention as attn_module
-    if not torch.cuda.is_available():
-        attn_module.XFORMERS_AVAILABLE = False
+        from depth_anything_v2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
+        
+        # Disable xformers for CPU inference (xformers requires CUDA)
+        import depth_anything_v2.metric_depth.depth_anything_v2.dinov2_layers.attention as attn_module
+        if not torch.cuda.is_available():
+            attn_module.XFORMERS_AVAILABLE = False
 
-    model_configs = {
-        'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
-        'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
-        'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
-    }
+        model_configs = {
+            'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+            'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+            'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
+        }
 
-    encoder = 'vits' # or 'vits', 'vitb'
-    dataset = 'hypersim' # 'hypersim' for indoor model, 'vkitti' for outdoor model
-    max_depth = 20 # 20 for indoor model, 80 for outdoor model
+        encoder = 'vits' # or 'vits', 'vitb'
+        dataset = 'hypersim' # 'hypersim' for indoor model, 'vkitti' for outdoor model
+        max_depth = 20 # 20 for indoor model, 80 for outdoor model
 
-    model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
-    checkpoint_path = os.path.join(PACKAGE_PATH, f'checkpoints/depth_anything_v2_metric_{dataset}_{encoder}.pth')
-    model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=False))
-    model.eval()
+        model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
+        checkpoint_path = os.path.join(PACKAGE_PATH, f'checkpoints/depth_anything_v2_metric_{dataset}_{encoder}.pth')
+        
+        # Set device
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False))
+        model.to(device)
+        model.eval()
+        print(f"DepthAnythingV2 model loaded with checkpoint: {checkpoint_path} on {device}")
 
-    if rgb_image is not None: # RGB image CV2 BGR format
-        print(f"Processing provided RGB image")
-        depth = model.infer_image(rgb_image) # HxW depth map in meters in numpy
-        # Save depth map as .npy file
-        depth = depth.astype(np.float32) # depth in meters
-        print(f"Depth map processing completed.")
-        return depth
-
-    if img_dir is not None:  # only used during testing/calibration
-        for image_path in sorted(glob.glob(os.path.join(img_dir, "color", '*.jpg'))):
-            print(f"Processing image: {image_path}")
-
-            depth_img_save_path = image_path.replace("color", "depth_da").replace(".jpg", ".npy").replace("/color/", "/depth_da/")
-
-            raw_img = cv2.imread(image_path)
-
-            depth = model.infer_image(raw_img) # HxW depth map in meters in numpy
+        if rgb_image is not None: # RGB image CV2 BGR format
+            print(f"Processing the provided RGB image")
+            depth = model.infer_image(rgb_image) # HxW depth map in meters in numpy
             # Save depth map as .npy file
             depth = depth.astype(np.float32) # depth in meters
-            np.save(depth_img_save_path, depth)
-            print(f"Depth map saved to: {depth_img_save_path}")
-            return None
+            print(f"Depth map processing completed.")
+            return depth
 
-    
+        if img_dir is not None:  # only used during testing/calibration
+            for image_path in sorted(glob.glob(os.path.join(img_dir, "color", '*.jpg'))):
+                print(f"Processing image: {image_path}")
+
+                depth_img_save_path = image_path.replace("color", "depth_da").replace(".jpg", ".npy").replace("/color/", "/depth_da/")
+
+                raw_img = cv2.imread(image_path)
+
+                depth = model.infer_image(raw_img) # HxW depth map in meters in numpy
+                # Save depth map as .npy file
+                depth = depth.astype(np.float32) # depth in meters
+                np.save(depth_img_save_path, depth)
+                print(f"Depth map saved to: {depth_img_save_path}")
+                return None
+    except Exception as e:
+        print(f"Error in run_depth_anything_v2_on_image: {e}")
+        return None
 
 def calibrate_depth_anything_v2(model):
 

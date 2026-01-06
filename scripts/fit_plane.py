@@ -3,15 +3,17 @@ import numpy as np
 import cv2
 import json
 import open3d as o3d
-from geometry_msgs.msg import PoseStamped
-import tf.transformations as tft
+
 from depth_calibration import run_depth_anything_v2_on_image, get_corrected_depth_image
 from config import IMG_SIZE, CONFIDENCE_THRESHOLD, DETECTION_JSON_PATH, MODEL_PATH, LABEL_MAP, FX, FY, CX, CY
 
-def project_to_3d(xmin, ymin, valid_mask, roi_depth, FX=FX, FY=FY, CX=CX, CY=CY):
+def project_to_3d(xmin, ymin, valid_mask=None, roi_depth=None, FX=FX, FY=FY, CX=CX, CY=CY):
     try:
+        if valid_mask is None:
+            # get valid depth points
+            valid_mask = np.isfinite(roi_depth) & (roi_depth > 0)
         # filter out depth outliers using percentiles (this is because the doors, often contains background, holes, weird monocular artifacts.)
-        z = roi_depth[valid_mask]
+        # z = roi_depth[valid_mask]
         # z_lo, z_hi = np.percentile(z, [10, 90])
         # valid_mask = valid_mask & (roi_depth >= z_lo) & (roi_depth <= z_hi)
 
@@ -41,7 +43,7 @@ def crop_to_bbox_depth(img, door_box):
 
     # extract ROI from RGB and depth
     roi_img = img[int(y_min):int(y_max), int(x_min):int(x_max)]
-    return roi_img, (int(x_min), int(x_max), int(y_min), int(y_max))
+    return roi_img
 
 def crop_to_bbox_rgb(img, door_box):
     h, w, _ = img.shape
@@ -55,7 +57,7 @@ def crop_to_bbox_rgb(img, door_box):
 
     # extract ROI from RGB and depth
     roi_img = img[int(y_min):int(y_max), int(x_min):int(x_max), :] # apply for all channels
-    return roi_img, (int(x_min), int(x_max), int(y_min), int(y_max))
+    return roi_img
 
 def transform_door_center_vector(door_centre, normal_vector, offset_distance=300.0):
     pass
@@ -138,16 +140,20 @@ def run_yolo_model(model_path=MODEL_PATH,
             label = f"{LABEL_MAP.get(cls_id, 'Unknown')} {conf:.2f}"
             cv2.putText(color_image, label, (x1, y1 - 10), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            
-        cv2.imshow("Test Image Detections", color_image)
-        # handle cv2 events and check for ESC key to exit
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        
+        try:
+            cv2.imshow("Test Image Detections", color_image)
+            # handle cv2 events and check for ESC key to exit
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        except Exception as viz_error:
+            print(f"Visualization skipped (no GUI support): {viz_error}")
 
         return valid_boxes
 
     except Exception as e:
-        print("Error testing model: %s", e)
+        print(f"Error in run_yolo_model: {e}")
+        return []
 
 def fit_plane(points_3d):
     try:
@@ -235,12 +241,14 @@ def compute_door_pose_goal(visualize_roi=True,
         
         # take all door and run plane fitting, for now take first door only
         door_box = door_boxes[0] 
+        # actual bbox coordinates from detection
+        x_min, x_max, y_min, y_max = (int(door_box["xmin"]), int(door_box["xmax"]), int(door_box["ymin"]), int(door_box["ymax"]))
         
         # shape check
-        roi_depth, (xmin, xmax, ymin, ymax) = crop_to_bbox_depth(depth_da_corr, door_box)
+        roi_depth = crop_to_bbox_depth(depth_da_corr, door_box)
 
         if visualize_roi:
-            roi_rgb, _ = crop_to_bbox_rgb(rgb_rs, door_box) # crop RGB for visualization
+            roi_rgb = crop_to_bbox_rgb(rgb_rs, door_box) # crop RGB for visualization
             roi_depth_clean = np.nan_to_num(roi_depth, nan=0.0) # replace nan with 0 for visualization
             depth_max = np.max(roi_depth_clean)
             if depth_max > 0:
@@ -255,14 +263,9 @@ def compute_door_pose_goal(visualize_roi=True,
             cv2.waitKey(0)
             cv2.destroyAllWindows()
 
-        # get valid depth points
-        valid_mask = np.isfinite(roi_depth) & (roi_depth > 0)
-        # valid_mask &= (roi_depth < 6.0)  # filter out depths beyond 6 meters, as it gives infinite plane
-        # valid_mask &= (roi_depth > 0.2)  # filter out depths below 0.2 meters (20 cm)
-        
         # project valid depth points to 3D
         # convert depth to mm before projection, use camera intrinsics from config (all in mm), from aligned depth to color
-        points_3d = project_to_3d(xmin, ymin, valid_mask, roi_depth)        
+        points_3d = project_to_3d(x_min, y_min, roi_depth)        
 
         # fit plane to depth points in ROI
         inliers, normal_vector, plane_model = fit_plane(points_3d)

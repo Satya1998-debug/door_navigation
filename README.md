@@ -127,3 +127,42 @@ sudo apt-get install -y liblcm-dev # for a2_ros2udp pkg (Unitree Go1 SDK)
 **Note:** Some packages are excluded from the x86_64 build and should be built on the Jetson ARM64 platform:
 - `lio_sam` - has PCL 1.10 compatibility issues with newer C++ standards (CATKIN_IGNORE added)
 - `a2_ros2udp` - requires ARM64 Unitree SDK libraries for Jetson (CATKIN_IGNORE added)
+
+
+### Transformer models installation
+- create a directory to store all transformer models
+```bash
+mkdir ~/door_navigation/src/door_navigation/py_packages/
+cd ~/door_navigation/src/door_navigation/py_packages/
+``` 
+- clone all respositories in py_packages directory and install requirements in uv venv
+- Download the models as per instructions in respective repos (usually checkpoints or weights folders)
+
+
+#### Ollama
+- install via terminal (this will be installed system-wide)
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+#### DepthAnythingV2
+- clone repo and install requirements inside the uv venv
+```bash
+git clone https://github.com/DepthAnything/Depth-Anything-V2
+uv pip install -r Depth-Anything-V2/requirements.txt
+```
+- rename the parent dir ater cloning to "depth_anything_v2" for easy imports
+- download the model weights as per instructions in the repo (store in door_navigation/checkpoints/)
+
+#### Yolo via Ultralytics
+- install ultralytics package inside uv venv
+```bash
+uv pip install ultralytics
+```
+- keep the weights in door_navigation/weights/
+
+#### VLMs
+- pull the models via ollama commands inside uv venv
+- install ollama python client inside uv venv
+```bash
+uv pip install ollama
+```

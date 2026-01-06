@@ -1,3 +1,6 @@
+import os
+PACKAGE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 RGB_TOPIC = '/camera/color/image_raw'
 DEPTH_TOPIC = '/camera/aligned_depth_to_color/image_raw'
 RGB_ROS_MSG_TYPE = 'sensor_msgs/Image'
@@ -6,8 +9,8 @@ CAMERA_INFO_TOPIC = '/camera/color/camera_info'
 
 # detector parameters
 LABEL_MAP = {0: 'door', 1: 'handle'}
-MODEL_PATH = '/home/satya/MT/catkin_ws/src/door_navigation/weights/last_yolo11m_ias12.pt'  # path to door detection model # last_yolo8m.pt
-DETECTION_JSON_PATH = '/home/satya/MT/catkin_ws/src/door_navigation/scripts/door_detections.json'  # path to save detection results
+MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias12.pt')  # path to door detection model # last_yolo8m.pt
+DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.json')  # path to save detection results
 CONFIDENCE_THRESHOLD = 0.5
 IMG_SIZE = 640  # input image size for the model
 DOOR_DETECTION_TOPIC = "/door_detections"  # assuming door class id is 0 in the model
