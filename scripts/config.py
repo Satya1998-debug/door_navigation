@@ -8,8 +8,8 @@ DEPTH_ROS_MSG_TYPE = 'sensor_msgs/Image'
 CAMERA_INFO_TOPIC = '/camera/color/camera_info'
 
 # detector parameters
-LABEL_MAP = {0: 'door', 1: 'handle'}
-MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias12.pt')  # path to door detection model # last_yolo8m.pt
+LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}
+MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.pt')  # path to door detection model # last_yolo8m.pt
 DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.json')  # path to save detection results
 CONFIDENCE_THRESHOLD = 0.5
 IMG_SIZE = 640  # input image size for the model

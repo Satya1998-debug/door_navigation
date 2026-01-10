@@ -13,7 +13,7 @@ from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 import rospkg
 # from config import LABEL_MAP
 
-LABEL_MAP = {0: 'door', 1: 'handle'}
+LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}
 
 # Get package path using rospkg (works with rosrun)
 rospack = rospkg.RosPack()
