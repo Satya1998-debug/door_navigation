@@ -4,7 +4,7 @@ weights/
 
 # images for test
 scripts/data
-# scripts/data_new
+scripts/data_new
 scripts/calibration_dataset_ias
 
 # cloned repositories

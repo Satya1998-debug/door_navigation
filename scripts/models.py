@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import rospkg
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
-from config import *
+from door_navigation.scripts.utils.config import *
 from PIL import Image
 
 # Get package path using rospkg (works with rosrun)

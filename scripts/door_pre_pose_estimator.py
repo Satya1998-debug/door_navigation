@@ -5,63 +5,10 @@ import json
 import open3d as o3d
 
 from depth_calibration import run_depth_anything_v2_on_image, get_corrected_depth_image
-from config import IMG_SIZE, CONFIDENCE_THRESHOLD, DETECTION_JSON_PATH, MODEL_PATH, LABEL_MAP, FX, FY, CX, CY
-
-def project_to_3d(x1, y1, valid_mask=None, depth=None, FX=FX, FY=FY, CX=CX, CY=CY):
-    # x1, y1: top-left corner of ROI in full image coordinates
-    try:
-        if valid_mask is None:
-            # get valid depth points
-            valid_mask = np.isfinite(depth) & (depth > 0)
-
-        ys, xs = np.where(valid_mask) # get valid pixel coordinates in ROI (coordinates in terms of ROI local)
-        Z = depth[ys, xs]  # 1D array of valid depth values in meters
-
-        # convert to full image coordinates
-        u = xs + x1
-        v = ys + y1
-        X = (u - CX) * Z / FX
-        Y = (v - CY) * Z / FY
-        points_3d = np.stack([X, Y, Z], axis=1)  # (N,3) meters
-        return points_3d
-    except Exception as e:
-        print(f"3D projection failed: {e}")
-        return np.array([])
-
-def crop_to_bbox_depth(img, door_box):
-    h, w = img.shape
-    x_min, y_min, x_max, y_max = door_box["bbox"]
-
-    # croping safely within image bounds
-    x_min = max(0, float(x_min))
-    y_min = max(0, float(y_min))
-    x_max = min(w-1, float(x_max))
-    y_max = min(h-1, float(y_max))
-
-    # extract ROI from RGB and depth
-    roi_img = img[int(y_min):int(y_max), int(x_min):int(x_max)]
-    return roi_img
-
-def crop_to_bbox_rgb(img, door_bbox):
-    h, w, _ = img.shape
-    x1, y1, x2, y2 = door_bbox
-
-    # croping safely within image bounds
-    x1 = max(0, float(x1))
-    y1 = max(0, float(y1))
-    x2 = min(w-1, float(x2))
-    y2 = min(h-1, float(y2))
-
-    # extract ROI from RGB and depth
-    roi_img = img[int(y1):int(y2), int(x1):int(x2), :] # apply for all channels
-    return roi_img
-
-def transform_door_center_vector(door_centre, normal_vector, offset_distance=300.0):
-    pass
-
-def yaw_to_quaternion(yaw):
-    q = tft.quaternion_from_euler(0, 0, yaw)  # roll=0, pitch=0, yaw=yaw
-    return q  # returns (x, y, z, w)
+from door_navigation.scripts.utils.config import IMG_SIZE, CONFIDENCE_THRESHOLD, DETECTION_JSON_PATH, MODEL_PATH, LABEL_MAP
+from door_navigation.scripts.utils.util import crop_to_bbox_depth, crop_to_bbox_rgb
+from door_navigation.scripts.utils.visualization import visualize_plane_with_normal
+from door_navigation.scripts.utils.util import project_to_3d
 
 def get_pre_door_pose(door_centre, normal_vector, offset_distance=1.0):
     door_centre_x, door_centre_y, door_centre_z = door_centre
@@ -183,10 +130,10 @@ def fit_plane(points_3d, ply_file_name=""):
         normal_vector = np.array([a, b, c]) # with zhis we can get any normal, can be either pointing towards or away from camera/origin
         normal_vector = normal_vector / np.linalg.norm(normal_vector)  # normalize for unit vector/direction
 
-        # Extract actual 3D points from inlier indices
+        # extract actual 3D points from inlier indices
         inlier_points = points_3d[inliers]
         
-        # Save inlier point cloud for visualization
+        # save inlier point cloud for visualization
         inlier_pcd = o3d.geometry.PointCloud()
         inlier_pcd.points = o3d.utility.Vector3dVector(inlier_points)
         if ply_file_name:
@@ -291,119 +238,6 @@ def compute_door_pose_goal(visualize_roi=True,
         print(f"Error in fit_roi_plane: {e}")
         return
 
-def visualize_plane_with_normal(inlier_points, normal_vector):
-    try:
-        inlier_centre = np.median(inlier_points, axis=0).astype(np.float32)  # inlier/door/wall center point
-        print(f"Door/Inlier center: X={inlier_centre[0]:.3f}m, Y={inlier_centre[1]:.3f}m, Z={inlier_centre[2]:.3f}m")
-        print(f"Normal vector: [{normal_vector[0]:.3f}, {normal_vector[1]:.3f}, {normal_vector[2]:.3f}]")
-        
-        # point cloud from inliers
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(inlier_points)
-        pcd.paint_uniform_color([0.0, 0.7, 0.0])  # green for visualization of inlier points
-        
-        # plane mesh (large rectangle aligned with plane)
-        extent = np.max(np.abs(inlier_points - inlier_centre), axis=0)
-        size = np.max(extent) * 1.5
-        
-        # tangent vectors perpendicular to normal for plane rectangle
-        if abs(normal_vector[0]) < 0.9:
-            tangent1 = np.cross(normal_vector, [1, 0, 0])
-        else:
-            tangent1 = np.cross(normal_vector, [0, 1, 0])
-        tangent1 = tangent1 / np.linalg.norm(tangent1)
-        tangent2 = np.cross(normal_vector, tangent1)
-        
-        # 4 corners of plane rectangle
-        vertices = [
-            inlier_centre + size * tangent1 + size * tangent2,
-            inlier_centre - size * tangent1 + size * tangent2,
-            inlier_centre - size * tangent1 - size * tangent2,
-            inlier_centre + size * tangent1 - size * tangent2,
-        ]
-        plane_mesh = o3d.geometry.TriangleMesh()
-        plane_mesh.vertices = o3d.utility.Vector3dVector(vertices)
-        plane_mesh.triangles = o3d.utility.Vector3iVector([[0,1,2], [0,2,3]])
-        plane_mesh.paint_uniform_color([0.8, 0.8, 0.0])  # yellow plane
-        plane_mesh.compute_vertex_normals()
-        
-        # normal vector arrow (RED)
-        arrow_length = 0.7  # 70cm arrow
-        arrow = o3d.geometry.TriangleMesh.create_arrow(
-            cylinder_radius=0.02,
-            cone_radius=0.05,
-            cylinder_height=arrow_length * 0.7,
-            cone_height=arrow_length * 0.3
-        )
-        arrow.paint_uniform_color([1.0, 0.0, 0.0])  # red arrow for normal vector
-        
-        # Rotate arrow to align with normal vector
-        z_axis = np.array([0, 0, 1])
-        rotation_axis = np.cross(z_axis, normal_vector)
-        if np.linalg.norm(rotation_axis) > 1e-6:
-            rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
-            angle = np.arccos(np.clip(np.dot(z_axis, normal_vector), -1, 1))
-            R = o3d.geometry.get_rotation_matrix_from_axis_angle(rotation_axis * angle)
-            arrow.rotate(R, center=[0, 0, 0])
-        arrow.translate(inlier_centre)
-        
-        # Camera viewing direction arrow (BLUE) - shows where camera is looking
-        camera_origin = np.array([0.0, 0.0, 0.0])
-        camera_dir = inlier_centre / np.linalg.norm(inlier_centre)  # unit vector to door
-        camera_arrow_length = 0.8
-        
-        camera_arrow = o3d.geometry.TriangleMesh.create_arrow(
-            cylinder_radius=0.015,
-            cone_radius=0.03,
-            cylinder_height=camera_arrow_length * 0.7,
-            cone_height=camera_arrow_length * 0.3
-        )
-        camera_arrow.paint_uniform_color([0.0, 0.5, 1.0])  # blue arrow for camera direction
-        
-        # Rotate camera arrow to point at door
-        rotation_axis_cam = np.cross(z_axis, camera_dir)
-        if np.linalg.norm(rotation_axis_cam) > 1e-6:
-            rotation_axis_cam = rotation_axis_cam / np.linalg.norm(rotation_axis_cam)
-            angle_cam = np.arccos(np.clip(np.dot(z_axis, camera_dir), -1, 1))
-            R_cam = o3d.geometry.get_rotation_matrix_from_axis_angle(rotation_axis_cam * angle_cam)
-            camera_arrow.rotate(R_cam, center=[0, 0, 0])
-        camera_arrow.translate(camera_origin)
-        
-        # Line from camera to door center (CYAN)
-        camera_to_door_line = o3d.geometry.LineSet()
-        camera_to_door_line.points = o3d.utility.Vector3dVector([camera_origin, inlier_centre])
-        camera_to_door_line.lines = o3d.utility.Vector2iVector([[0, 1]])
-        camera_to_door_line.colors = o3d.utility.Vector3dVector([[0, 1, 1]])  # cyan
-        
-        # coordinate frame at camera origin
-        coord_frame_camera = o3d.geometry.TriangleMesh.create_coordinate_frame(
-            size=0.3, origin=camera_origin
-        )
-        
-        # coordinate frame at door center
-        coord_frame_door = o3d.geometry.TriangleMesh.create_coordinate_frame(
-            size=0.2, origin=inlier_centre
-        )
-        
-        print("\nVisualization Legend:")
-        print("  - Green points: Plane inlier points")
-        print("  - Yellow mesh: Fitted plane")
-        print("  - RED arrow at door: Surface normal (points away from surface)")
-        print("  - BLUE arrow from camera: Camera viewing direction")
-        print("  - Cyan line: Camera to door center")
-        print("  - RGB axes: X=Right, Y=Down, Z=Forward (ROS optical frame)")
-        
-        # visualization
-        o3d.visualization.draw_geometries(
-            [pcd, plane_mesh, arrow, camera_arrow, camera_to_door_line, 
-             coord_frame_camera, coord_frame_door],
-            window_name="Door Plane & Normal Visualization",
-            width=1280, height=720,
-            point_show_normal=False
-        )
-    except Exception as e:
-        print(f"Error in visualize_plane_with_normal: {e}")
-        return
 
 if __name__ == "__main__":
     compute_door_pose_goal()

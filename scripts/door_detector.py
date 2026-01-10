@@ -16,7 +16,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
-from config import *
+from door_navigation.scripts.utils.config import *
 from models import load_yolo, depth_anything_v2_metric, visualize_depth
 
 
