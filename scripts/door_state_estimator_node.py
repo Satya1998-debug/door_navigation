@@ -1,12 +1,14 @@
+#!/home/satya/MT/uv_ros_py38/bin python3
+
 import base64
 from os import path
 from ollama import chat
 import cv2
 import numpy as np
-from door_navigation.scripts.door_pre_pose_estimator import fit_plane, run_depth_anything_v2_on_image, get_corrected_depth_image, \
+from door_navigation.scripts.door_pre_pose_estimator_node import fit_plane, run_depth_anything_v2_on_image, get_corrected_depth_image, \
             run_yolo_model, project_to_3d, visualize_plane_with_normal
 from utils.visualization import visualize_door_passability, visualize_roi
-from utils.util import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
+from door_navigation.scripts.utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
 
 FX = 385.88861083984375
 FY = 385.3906555175781

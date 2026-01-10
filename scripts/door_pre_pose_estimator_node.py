@@ -1,14 +1,17 @@
+#!/home/satya/MT/uv_ros_py38/bin python3
+
 import sys, os
 import numpy as np
 import cv2
 import json
 import open3d as o3d
 
-from depth_calibration import run_depth_anything_v2_on_image, get_corrected_depth_image
+from door_navigation.scripts.door_ros_interfaces import DoorDetector
+from door_navigation.scripts.utils.depth_calibration import run_depth_anything_v2_on_image, get_corrected_depth_image
 from door_navigation.scripts.utils.config import IMG_SIZE, CONFIDENCE_THRESHOLD, DETECTION_JSON_PATH, MODEL_PATH, LABEL_MAP
-from door_navigation.scripts.utils.util import crop_to_bbox_depth, crop_to_bbox_rgb
+from door_navigation.scripts.utils.utils import crop_to_bbox_depth, crop_to_bbox_rgb
 from door_navigation.scripts.utils.visualization import visualize_plane_with_normal
-from door_navigation.scripts.utils.util import project_to_3d
+from door_navigation.scripts.utils.utils import project_to_3d
 
 def get_pre_door_pose(door_centre, normal_vector, offset_distance=1.0):
     door_centre_x, door_centre_y, door_centre_z = door_centre
@@ -20,84 +23,6 @@ def get_pre_door_pose(door_centre, normal_vector, offset_distance=1.0):
     pre_yaw = np.arctan2(door_centre_y - pre_y, door_centre_x - pre_x) # yaw angle in radians
 
     return pre_x, pre_y, pre_z, pre_yaw
-
-def run_yolo_model(model_path=MODEL_PATH, 
-                   rgb_image=None, 
-                   img_size=IMG_SIZE, 
-                   confidence_threshold=CONFIDENCE_THRESHOLD):
-    try:
-        from ultralytics import YOLO
-
-        if rgb_image is None:
-            print("No RGB image provided for YOLO model inference.")
-            return
-
-        # load the model
-        model = YOLO(model_path)
-
-        valid_boxes = []
-        jsonable_valid_boxes = []
-
-        detections = dict()
-
-        # run inference
-        results = model(source=rgb_image, imgsz=img_size, conf=confidence_threshold)
-
-        # print results
-        for result in results:
-            print(f"got {len(result.boxes)} boxes in test image")
-            for i, box in enumerate(result.boxes):
-                print("for box-{}:".format(i))
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                bbox = box.xyxy[0].cpu().numpy()  # get bbox coordinates
-                print(f"Class ID: {cls_id}, Confidence: {conf:.2f}, BBox: {bbox}")
-
-                # filter boxes above confidence threshold
-                if conf >= confidence_threshold:
-                    print(f"Detected door with confidence {conf:.2f} at bbox {bbox}")
-                    valid_boxes.append({
-                        'cls_id': cls_id,  # 0 for door, 1 for handle
-                        'conf': conf,
-                        'bbox': bbox
-                    })
-                    jsonable_valid_boxes.append({
-                        'cls_id': cls_id,  # 0 for door, 1 for handle
-                        'conf': conf,
-                        'bbox': bbox.tolist()  # convert numpy array to list for json serialization
-                    })
-            detections.update({
-                'valid_detections': jsonable_valid_boxes
-            })
-
-        # write detections to json file
-        with open(os.path.join(DETECTION_JSON_PATH), 'w') as f:
-            import json
-            json.dump(detections, f, indent=4)
-
-        color_image = rgb_image.copy()
-        for vb in valid_boxes:
-            x1, y1, x2, y2 = map(int, vb['bbox'])
-            conf = vb['conf']
-            cls_id = vb['cls_id']
-            cv2.rectangle(color_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"{LABEL_MAP.get(cls_id, 'Unknown')} {conf:.2f}"
-            cv2.putText(color_image, label, (x1, y1 - 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        
-        try:
-            cv2.imshow("Test Image Detections", color_image)
-            # handle cv2 events and check for ESC key to exit
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-        except Exception as viz_error:
-            print(f"Visualization skipped (no GUI support): {viz_error}")
-
-        return valid_boxes
-
-    except Exception as e:
-        print(f"Error in run_yolo_model: {e}")
-        return []
 
 def fit_plane(points_3d, ply_file_name=""):
     try:
@@ -172,13 +97,14 @@ def compute_door_pose_goal(visualize_roi=True,
         RAW_RS_DEPTH_PATH = "/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_depth_lab_35.png"
         depth_rs = cv2.imread(RAW_RS_DEPTH_PATH, cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0  # convert mm to meters
 
+        door_detector = DoorDetector()  # initialize door detector
         # get RAW depth from DepthAnything model (in meters)
-        depth_da = run_depth_anything_v2_on_image(rgb_image=rgb_rs)
+        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs)
         # apply correction to depth_da_raw using pre-computed calibration coefficients
-        depth_da_corr = get_corrected_depth_image(depth_da=depth_da, model="quad")
+        depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
 
         # get bounding box, make detection object
-        detections = run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
+        detections = door_detector.run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
         door_boxes = [item for item in detections if item["cls_id"] == 0]  # assuming class_id 0 is door
         if len(door_boxes) == 0:
             print("No door detected in the image.")

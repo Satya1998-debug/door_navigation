@@ -1,5 +1,7 @@
 import os
-PACKAGE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import rospkg
+rospack = rospkg.RosPack()
+PACKAGE_PATH = rospack.get_path('door_navigation')
 
 RGB_TOPIC = '/camera/color/image_raw'
 DEPTH_TOPIC = '/camera/aligned_depth_to_color/image_raw'

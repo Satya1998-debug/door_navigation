@@ -160,9 +160,9 @@ include_directories(
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
-  scripts/test_camera.py
-  scripts/door_detector.py
-  scripts/test_model.py
+  scripts/door_detector_node.py
+  scripts/door_pre_pose_estimator_node.py
+  scripts/door_state_estimator_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

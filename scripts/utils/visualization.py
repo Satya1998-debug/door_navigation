@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-from util import crop_to_bbox_rgb
+from door_navigation.scripts.utils.utils import crop_to_bbox_rgb
 import open3d as o3d
 from config import CX, FX
 
