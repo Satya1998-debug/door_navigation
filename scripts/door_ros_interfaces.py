@@ -13,11 +13,13 @@ import numpy as np
 import rospkg
 from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose
 
-
 # ------ path setup -----
-# Get package path using rospkg (works with rosrun)
-rospack = rospkg.RosPack()
-PACKAGE_PATH = rospack.get_path('door_navigation')
+try:
+    rospack = rospkg.RosPack()
+    PACKAGE_PATH = rospack.get_path('door_navigation')
+except (rospkg.ResourceNotFound, rospkg.common.ResourceNotFound):
+    PACKAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    print(f"[ROS-Interface] rospkg not available, using relative path: {PACKAGE_PATH}")
 
 script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
@@ -217,7 +219,7 @@ class DoorDetector:
             max_depth = 20 # 20 for indoor model, 80 for outdoor model
 
             model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
-            checkpoint_path = os.path.join(PACKAGE_PATH, f'checkpoints/depth_anything_v2_metric_{dataset}_{encoder}.pth')
+            checkpoint_path = DEPTH_ANYTHING_V2_PATH
             
             # Set device
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -303,3 +305,4 @@ class DoorDetectionPublisher:
             detections_msg.detections.append(detection)
 
         return detections_msg
+

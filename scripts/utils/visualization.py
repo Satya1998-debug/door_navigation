@@ -1,8 +1,8 @@
 import numpy as np
 import cv2
-from door_navigation.scripts.utils.utils import crop_to_bbox_rgb
+from utils.utils import crop_to_bbox_rgb
 import open3d as o3d
-from config import CX, FX
+from utils.config import CX, FX
 
 def visualize_roi(rgb_rs, door_bbox, roi_depth):
     try:

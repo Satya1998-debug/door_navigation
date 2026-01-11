@@ -1,19 +1,28 @@
-#!/home/satya/MT/uv_ros_py38/bin python3
-
+import rospkg
 import sys, os
 import numpy as np
 import cv2
 import json
 import open3d as o3d
 
-from door_navigation.scripts.door_ros_interfaces import DoorDetector
-from door_navigation.scripts.utils.depth_calibration import run_depth_anything_v2_on_image, get_corrected_depth_image
-from door_navigation.scripts.utils.config import IMG_SIZE, CONFIDENCE_THRESHOLD, DETECTION_JSON_PATH, MODEL_PATH, LABEL_MAP
-from door_navigation.scripts.utils.utils import crop_to_bbox_depth, crop_to_bbox_rgb
-from door_navigation.scripts.utils.visualization import visualize_plane_with_normal
-from door_navigation.scripts.utils.utils import project_to_3d
+# ------ path setup -----
+try:
+    rospack = rospkg.RosPack()
+    PACKAGE_PATH = rospack.get_path('door_navigation')
+except (rospkg.ResourceNotFound, rospkg.common.ResourceNotFound):
+    PACKAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    print(f"[door-pose-estimator] rospkg not available, using relative path: {PACKAGE_PATH}")
+
+script_dir = os.path.join(PACKAGE_PATH, 'scripts')
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+from utils.utils import crop_to_bbox_depth, crop_to_bbox_rgb
+from utils.utils import project_to_3d
+
 
 def get_pre_door_pose(door_centre, normal_vector, offset_distance=1.0):
+    # not used currently
     door_centre_x, door_centre_y, door_centre_z = door_centre
 
     pre_x = door_centre_x + normal_vector[0] * offset_distance
@@ -83,44 +92,38 @@ def fit_plane(points_3d, ply_file_name=""):
         traceback.print_exc()
         return None, None, None
 
-def compute_door_pose_goal(visualize_roi=True, 
-                           visualize_3d_pcd=True, 
-                           visualize_plane=True, 
-                           visualize_normal=True):
+def compute_door_3d_pose_from_detection(rgb_image, depth_image, door_box, door_detector, visualize_roi=False):
+    """
+    Compute 3D door pose (center and normal) from RGB-D images and door detection.
+    
+    Args:
+        rgb_image: RGB image (numpy array HWC)
+        depth_image: Depth image in meters (numpy array HW)
+        door_box: Door detection dict with 'bbox' key [x1, y1, x2, y2]
+        door_detector: DoorDetector instance for depth processing
+        visualize_roi: Whether to visualize cropped regions
+    
+    Returns:
+        tuple: (door_centre, normal_vector, inliers) or (None, None, None) if failed
+            - door_centre: 3D position in camera frame (numpy array [x, y, z])
+            - normal_vector: 3D normal vector (numpy array [x, y, z])
+            - inliers: 3D points that fit the plane (numpy array Nx3)
+    """
     try:
-
-        # loads RGB 
-        IMAGE_PATH = "/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_35.jpg"
-        rgb_rs = cv2.imread(IMAGE_PATH) # numpy array HWC
-        
-        # loads depth map
-        RAW_RS_DEPTH_PATH = "/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_depth_lab_35.png"
-        depth_rs = cv2.imread(RAW_RS_DEPTH_PATH, cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0  # convert mm to meters
-
-        door_detector = DoorDetector()  # initialize door detector
         # get RAW depth from DepthAnything model (in meters)
-        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs)
+        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_image)
         # apply correction to depth_da_raw using pre-computed calibration coefficients
         depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
-
-        # get bounding box, make detection object
-        detections = door_detector.run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
-        door_boxes = [item for item in detections if item["cls_id"] == 0]  # assuming class_id 0 is door
-        if len(door_boxes) == 0:
-            print("No door detected in the image.")
-            return
         
-        # take all door and run plane fitting, for now take first door only
-        door_box = door_boxes[0]
-        bbox = door_box["bbox"]
         # actual bbox coordinates from detection
+        bbox = door_box["bbox"]
         x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
         
-        # shape check
+        # Crop depth to door region
         roi_depth = crop_to_bbox_depth(depth_da_corr, door_box)
 
         if visualize_roi:
-            roi_rgb = crop_to_bbox_rgb(rgb_rs, door_box["bbox"]) # crop RGB for visualization
+            roi_rgb = crop_to_bbox_rgb(rgb_image, door_box["bbox"]) # crop RGB for visualization
             roi_depth_clean = np.nan_to_num(roi_depth, nan=0.0) # replace nan with 0 for visualization
             depth_max = np.max(roi_depth_clean)
             if depth_max > 0:
@@ -135,35 +138,27 @@ def compute_door_pose_goal(visualize_roi=True,
             cv2.waitKey(0)
             cv2.destroyAllWindows()
 
-        # project valid depth points to 3D
-        # convert depth to mm before projection, use camera intrinsics from config (all in mm), from aligned depth to color
+        # project valid depth points to 3D in camera frame
         points_3d = project_to_3d(x1, y1, roi_depth)        
 
         # fit plane to depth points in ROI
-        inliers, normal_vector, plane_model = fit_plane(points_3d, "roi_door_plane_points_full")
+        inliers, normal_vector, plane_model = fit_plane(points_3d, "")
         
         if inliers is None or normal_vector is None or plane_model is None:
             print("Plane fitting failed, cannot compute door pose")
-            return
+            return None, None, None
 
-        # get door centre
-        # door_centre = np.mean(inliers, axis=0).astype(np.float32)  # mean of all 3D points in meters
-        
-        visualize_plane_with_normal(inliers, 
-                                    normal_vector=normal_vector)
-        # calculate a point infront of door along normal vector (pre-door pose)
+        # get door centre in camera frame (median is more robust to outliers than mean)
         door_centre = np.median(inliers, axis=0).astype(np.float32)  # median of all 3D points in meters
-        pre_x, pre_y, pre_z, pre_yaw = get_pre_door_pose(door_centre, normal_vector, offset_distance=1.0)  # 1m infront of door 
-
-        print(f"Pre-door pose: X={pre_x:.3f}m, Y={pre_y:.3f}m, Z={pre_z:.3f}m, Yaw={np.degrees(pre_yaw):.2f}deg")
-
-        # TODO: publish pre-door pose and door normal vector for door navigation
-        # TODO: transform from camera frame to robot base frame if needed
+        
+        return door_centre, normal_vector, inliers
 
     except Exception as e:
-        print(f"Error in fit_roi_plane: {e}")
-        return
+        print(f"Error computing door 3D pose: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None
 
 
 if __name__ == "__main__":
-    compute_door_pose_goal()
+    compute_door_3d_pose_from_detection()

@@ -17,7 +17,7 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 from door_ros_interfaces import RGBDImageReciever, DoorDetector, DoorDetectionPublisher
-from utils.config import *
+from utils.config import CONFIDENCE_THRESHOLD, IMG_SIZE, LABEL_MAP, MODEL_PATH
 
 
 def main(visualize_detection=True):
@@ -50,7 +50,7 @@ def main(visualize_detection=True):
                                                           visualize=False)
                 
                 # depth correction using DepthAnything V2 (not needed in this node)
-                # depth_image_corrected = door_detector.run_depth_anything_v2_on_image(color_image, depth_image_rs)
+                depth_image_corrected = door_detector.run_depth_anything_v2_on_image(color_image, depth_image_rs)
 
                 
                 # ------ ros detections publish -------
@@ -58,9 +58,6 @@ def main(visualize_detection=True):
                     rospy.loginfo("Detected %d doors/handles", len(detections))
                 else:
                     rospy.loginfo("No doors/handles detected")
-                # detection_msg = detection_publisher.create_detections_msg(detections)
-                # detection_publisher.door_detection_pub.publish(detection_msg)
-                # rospy.loginfo("Published %d door detections", len(detection_msg.detections))
 
                 # visualization
                 if visualize_detection:
@@ -78,10 +75,18 @@ def main(visualize_detection=True):
                     cv2.waitKey(1)  # non-blocking update for window
 
                 # TODO: door pose estimation (distance from robot)
+                # door_pose = None
+                # door_centre = None
+                # for det in detections:
+                #     door_pose, door_centre = door_detector.estimate_door_pose_from_depth(det, depth_image_corrected)
+                #     det['door_pose'] = door_pose
+                #     det['door_centre'] = door_centre
 
-                # TODO: check global path plan and check if door is on path
+                # publish detections and door poses
+                detection_msg = detection_publisher.create_detections_msg(detections)
+                detection_publisher.door_detection_pub.publish(detection_msg)
+                rospy.loginfo("Published %d door detections", len(detection_msg.detections))
 
-                # TODO: set /pre_door_pose_enabled to True if door is on path (pre-door pose estimation node will run then)
 
             frame_count += 1
         else:

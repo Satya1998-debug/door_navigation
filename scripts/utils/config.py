@@ -1,13 +1,25 @@
 import os
 import rospkg
-rospack = rospkg.RosPack()
-PACKAGE_PATH = rospack.get_path('door_navigation')
 
+# Try to get package path via rospkg (for rosrun), fall back to relative path (for standalone scripts)
+try:
+    rospack = rospkg.RosPack()
+    PACKAGE_PATH = rospack.get_path('door_navigation')
+except (rospkg.ResourceNotFound, rospkg.common.ResourceNotFound):
+    # Fallback: utils/config.py -> scripts/utils -> scripts -> door_navigation
+    PACKAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    print(f"[CONFIG] rospkg not available, using relative path: {PACKAGE_PATH}")
+
+# ROS topics (image)
 RGB_TOPIC = '/camera/color/image_raw'
 DEPTH_TOPIC = '/camera/aligned_depth_to_color/image_raw'
 RGB_ROS_MSG_TYPE = 'sensor_msgs/Image'
 DEPTH_ROS_MSG_TYPE = 'sensor_msgs/Image'
 CAMERA_INFO_TOPIC = '/camera/color/camera_info'
+
+# ROS topics (detection)
+DOOR_DETECTION_TOPIC = "/door_detections"
+
 
 # detector parameters
 LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}
@@ -15,14 +27,16 @@ MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.
 DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.json')  # path to save detection results
 CONFIDENCE_THRESHOLD = 0.5
 IMG_SIZE = 640  # input image size for the model
-DOOR_DETECTION_TOPIC = "/door_detections"  # assuming door class id is 0 in the model
 YOLO_DETECTION_MODELS = ["yolo_11m", "yolo_v8l", "yolo_v8m", "yolo_v5l"]  # model name for detection
 DEPTH_ESTIMATION_MODELS = ["depth_anything_v2"]  # model name for depth estimation
 MODEL_BBOX = "yolo_v5l"  # choose model for detection
 DEPTH_MODEL = "depth_anything_v2"  # choose model for depth estimation
+DEPTH_ANYTHING_V2_PATH = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_metric_hypersim_vits.pth')  # path to depth anything v2 model
 
-# temporary
-IMAGE_PATH = ""
+# DOOR navigation parameters
+POST_DOOR_DISTANCE = 1.5  # meters after door
+PRE_DOOR_DISTANCE = 1.2   # meters before door
+DOOR_TRIGGER_DISTANCE = 2.0  # start door logic when closer than this
 
 # CAMERA INTRINSICS (aligned depth to color), units in pixels
 FX = 385.88861083984375

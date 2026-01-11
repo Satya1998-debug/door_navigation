@@ -1,14 +1,12 @@
-#!/home/satya/MT/uv_ros_py38/bin python3
 
 import base64
-from os import path
 from ollama import chat
 import cv2
 import numpy as np
-from door_navigation.scripts.door_pre_pose_estimator_node import fit_plane, run_depth_anything_v2_on_image, get_corrected_depth_image, \
-            run_yolo_model, project_to_3d, visualize_plane_with_normal
+from door_ros_interfaces import DoorDetector
+from door_navigation.scripts.door_pose_estimator_test import *
 from utils.visualization import visualize_door_passability, visualize_roi
-from door_navigation.scripts.utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
+from utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
 
 FX = 385.88861083984375
 FY = 385.3906555175781
@@ -375,14 +373,16 @@ def estimate_door_state(img_path, depth_path, visualize=True):
         # loads depth map
         depth_rs = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0  # convert mm to meters
 
+        door_detector = DoorDetector()  # initialize door detector
         # get RAW depth from DA model (in meters)
-        depth_da = run_depth_anything_v2_on_image(rgb_image=rgb_rs)
+        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs)
         # apply correction to depth_da_raw using pre-computed calibration coefficients
-        depth_da_corr = get_corrected_depth_image(depth_da=depth_da, model="quad")
+        depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
         # depth_da_corr = depth_rs
 
         # get bounding box, make detection object
-        detections = run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
+        
+        detections = door_detector.run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
 
         # decide the door type based on detection (single/double)
         # since door state estimation will run infront of the door, we assume only one door is present in the scene
