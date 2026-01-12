@@ -1,7 +1,4 @@
-#!/home/satya/MT/uv_ros_py38/bin python3
-
 import base64
-from os import path
 from ollama import chat
 import cv2
 import numpy as np
@@ -357,9 +354,6 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
                                                             door_type="double")
              return door_state_vlm
        
-
-        # TODO: Audio generation based on door state and human presence (door_state_vlm output)
-
         return door_state
 
     except Exception as e:
@@ -367,6 +361,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         return None
 
 def estimate_door_state(img_path, depth_path, visualize=True):
+    # NOT used currently (only for testing)
     # NOTE: this is executed at the Pre-Pose stage, before robot moves through the door
     try:
         # loads RGB 
@@ -419,22 +414,6 @@ def estimate_door_state(img_path, depth_path, visualize=True):
         print(f"Error during door_state_estimate: {e}")
         return None
 
-def door_traversal(img_path, depth_path):
-    # the robot is at pre-door pose, estimate door state
-    door_state = estimate_door_state(img_path, depth_path, visualize=True)
-
-    # TODO: Human-conversation based on door state (door_state output)
-
-    # TODO: If human >>> confirms (approval to proceed) >>> return True else False
-    human_approval = True  # for now assume always approved
-
-    # final door state estimation, after this stage robot can proceed to move through the door
-    if human_approval:
-        door_state_final = estimate_door_state(img_path, depth_path, visualize=True)
-        print(f"Final door state after human approval: {door_state_final}")
-    else:
-        print("Human did not approve door traversal.")
-        door_state_final = None # need to wait or re-attempt
         
 if __name__ == "__main__":
     import os

@@ -1,7 +1,6 @@
 import numpy as np
 import cv2
 from utils.config import CX, FX, CY, FY
-import tf.transformations as tft
 
 def crop_to_bbox_depth(img, door_box):
     h, w = img.shape
@@ -93,13 +92,6 @@ def ring_mask(img_width, img_height, inner_bbox, outer_bbox, visualize_mask=Fals
     mask[y1_o:y2_o, x1_o:x2_o] = True  # outer box is set first
     mask[y1:y2, x1:x2] = False # inner box
     return mask
-
-def transform_door_center_vector(door_centre, normal_vector, offset_distance=300.0):
-    pass
-
-def yaw_to_quaternion(yaw):
-    q = tft.quaternion_from_euler(0, 0, yaw)  # roll=0, pitch=0, yaw=yaw
-    return q  # returns (x, y, z, w)
 
 def project_to_3d(x1, y1, valid_mask=None, depth=None, FX=FX, FY=FY, CX=CX, CY=CY):
     # x1, y1: top-left corner of ROI in full image coordinates

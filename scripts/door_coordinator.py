@@ -31,6 +31,7 @@ if script_dir not in sys.path:
 from utils.config import *
 from door_navigation.scripts.door_pose_estimator import get_pre_door_pose, compute_door_3d_pose_from_detection
 from door_ros_interfaces import DoorDetector, RGBDImageReciever
+from door_state_estimator import estimate_single_door_state, estimate_double_door_state, is_door_passable
 import cv2
 import numpy as np
 
@@ -60,12 +61,13 @@ class DoorCoordinator:
         self.current_plan = None # latest navigation plan
         self.current_door_pose_map = None
         self.door_handled = False
+        self.original_goal = None  # need to save original destination
         
         # vision-based door detection - run YOLO directly, no external subscription
         self.door_detector = DoorDetector()
         self.rgbd_receiver = RGBDImageReciever()
         
-        # Detection control
+        # detection control
         self.frame_count = 0
         self.detection_interval = 5  # Run YOLO every 5 frames to save computation
         self.cached_detections = []  # Cache detections between intervals
@@ -80,6 +82,9 @@ class DoorCoordinator:
 
         # subscribe to global plan from move_base (TEB publishes to this topic)
         rospy.Subscriber(TEB_GLOBAL_PLAN_TOPIC, Path, self.plan_callback, queue_size=1)
+        
+        # subscribe to human confirmation for door traversal
+        rospy.Subscriber("/door/human_confirm", Bool, self.human_confirm_callback, queue_size=1)
 
         # move base client
         self.move_base_client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
@@ -156,28 +161,28 @@ class DoorCoordinator:
         return self.check_door_intersects_path(door_pose_map)
     
     def compute_door_pose_in_map_frame(self, door_detection_dict, rgb_image, depth_image_mm):
-        """Compute 3D door pose in map frame using vision + depth.
-        
-        Args:
-            door_detection_dict: YOLO detection dict with 'bbox', 'conf', 'cls_id'
-            rgb_image: RGB image (same frame as detection)
-            depth_image_mm: Depth image in mm (same frame as detection)
-        """
+
         try:
-            # Convert depth from mm to meters
-            depth_image = depth_image_mm.astype(np.float32) / 1000.0
+            depth_image = depth_image_mm.astype(np.float32) / 1000.0 # convert mm to meters
             # Get door bounding box from YOLO detection dict
             bbox = door_detection_dict['bbox']
             x1, y1, x2, y2 = map(int, bbox)
             
+            # Get door type from detection
+            door_cls_id = door_detection_dict.get('cls_id', 1)  # default to single door
+            LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}
+            door_type = LABEL_MAP.get(door_cls_id, 'door_single')
+            rospy.loginfo(f"Door type detected: {door_type}")
+            
             # Create door box dict for compute_door_3d_pose_from_detection
             door_box_dict = {"bbox": [x1, y1, x2, y2]}
             
-            door_centre_camera, normal_vector, inliers = compute_door_3d_pose_from_detection(
+            door_centre_camera, normal_vector = compute_door_3d_pose_from_detection(
                 rgb_image, 
                 depth_image, 
                 door_box_dict, 
                 self.door_detector,
+                door_type=door_type,
                 visualize_roi=False
             )
             
@@ -305,7 +310,49 @@ class DoorCoordinator:
         return goal
 
     def compute_post_door_goal(self):
-        pass
+        """Compute post-door goal to continue navigation after traversing door."""
+        if self.current_door_pose_map is None:
+            rospy.logwarn("No door pose available for post-door goal")
+            # Fallback: use end of current plan
+            if self.current_plan and len(self.current_plan.poses) > 0:
+                return self.current_plan.poses[-1]
+            return None
+        
+        # Use vision-based door pose to compute post-door position
+        door_pos = self.current_door_pose_map["position"]
+        door_normal = self.current_door_pose_map["normal"]
+        
+        # Compute post-door pose (1.5m past door along normal, opposite direction)
+        door_centre = np.array(door_pos)
+        normal_vector = np.array(door_normal)
+        
+        # Go through the door (negative normal direction)
+        post_x = door_centre[0] - normal_vector[0] * self.post_door_distance
+        post_y = door_centre[1] - normal_vector[1] * self.post_door_distance
+        post_z = door_centre[2] - normal_vector[2] * self.post_door_distance
+        
+        # Calculate yaw pointing forward through door
+        post_yaw = np.arctan2(-normal_vector[1], -normal_vector[0])
+        
+        # Create PoseStamped goal
+        goal = PoseStamped()
+        goal.header.frame_id = "map"
+        goal.header.stamp = rospy.Time.now()
+        goal.pose.position.x = post_x
+        goal.pose.position.y = post_y
+        goal.pose.position.z = 0.0  # Keep on ground plane
+        
+        # Convert yaw to quaternion
+        from tf.transformations import quaternion_from_euler
+        quat = quaternion_from_euler(0, 0, post_yaw)
+        goal.pose.orientation.x = quat[0]
+        goal.pose.orientation.y = quat[1]
+        goal.pose.orientation.z = quat[2]
+        goal.pose.orientation.w = quat[3]
+        
+        rospy.loginfo(f"Vision-based post-door goal: x={post_x:.2f}, y={post_y:.2f}, yaw={np.degrees(post_yaw):.1f}°")
+        
+        return goal
 
     def send_goal(self, pose_stamped):
         goal = MoveBaseGoal()
@@ -314,18 +361,103 @@ class DoorCoordinator:
         rospy.loginfo("Sent navigation goal")
 
     def trigger_pre_door(self):
+        # Save the original goal before interrupting
+        if self.original_goal is None and self.current_plan:
+            self.original_goal = self.current_plan.poses[-1]  # end of planned path
+            rospy.loginfo("Saved original navigation goal")
+        
         rospy.loginfo("Triggering pre-door pose")
         pre_goal = self.compute_pre_door_goal()
         if pre_goal:
             self.send_goal(pre_goal)
             self.state = DoorState.APPROACHING_DOOR
+    
+    def estimate_door_state_at_pre_door(self):
+        """Run door state estimation at pre-door position using current RGB-D images."""
+        try:
+            # Get current RGB-D frame
+            rgb_image = self.rgbd_receiver.latest_frame_color
+            depth_image_mm = self.rgbd_receiver.latest_frame_depth
+            
+            if rgb_image is None or depth_image_mm is None:
+                rospy.logwarn("No camera images available for door state estimation")
+                return None
+            
+            # Convert depth from mm to meters for door_state_estimator
+            depth_image = depth_image_mm.astype(np.float32) / 1000.0
+            
+            # Get door detection from cached detections
+            if len(self.cached_detections) == 0:
+                rospy.logwarn("No cached door detection for state estimation")
+                return None
+            
+            # Get best door detection
+            best_door = max(self.cached_detections, key=lambda d: d['conf'])
+            door_cls_id = best_door['cls_id']
+            door_bbox = best_door['bbox']
+            
+            # Determine door type: 0=door_double, 1=door_single
+            LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}
+            door_type = LABEL_MAP.get(door_cls_id, 'unknown')
+            
+            rospy.loginfo(f"Estimating state for {door_type} at pre-door position...")
+            
+            # Crop ROI depth for door
+            from utils.utils import crop_to_bbox_depth
+            door_box_dict = {"bbox": door_bbox}
+            roi_depth = crop_to_bbox_depth(depth_image, door_box_dict)
+            full_depth = depth_image
+            
+            # Call appropriate estimator based on door type
+            door_state = None
+            if door_type == 'door_single':
+                door_state = estimate_single_door_state(
+                    door_bbox, rgb_image, roi_depth, full_depth, 
+                    visualize=False, use_vlm=False
+                )
+            elif door_type == 'door_double':
+                door_state = estimate_double_door_state(
+                    door_bbox, rgb_image, roi_depth, full_depth,
+                    visualize=False, use_vlm=False
+                )
+            else:
+                rospy.logwarn(f"Unknown door type: {door_type}")
+                return None
+            
+            if door_state:
+                rospy.loginfo(f"Door state estimation result: {door_state}")
+            else:
+                rospy.logwarn("Door state estimation failed")
+            
+            return door_state
+            
+        except Exception as e:
+            rospy.logerr(f"Error in door state estimation: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
             
     def check_pre_door_reached(self):
+        """Check if robot reached pre-door position."""
         if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:
             rospy.loginfo("Reached pre-door pose")
             self.state = DoorState.AT_PRE_DOOR
-            rospy.loginfo("Trigger DoorStateEstimation (run once here)")
+            
+            # Run door initial state estimation
+            rospy.loginfo("Running door initial state estimation...")
+            door_state = self.estimate_door_state_at_pre_door()
+            
+            # In check_pre_door_reached(), you can add logic like:
+            if door_state and door_state.get('is_passable') and door_state.get('door_state') == 'open':
+                rospy.loginfo("Door is open and passable, proceeding automatically")
+                self.send_post_door_goal()  # Skip human confirmation!
+            else:
+                rospy.loginfo("Door requires attention, waiting for human")
+                self.state = DoorState.WAIT_HUMAN
+                        
+            # Transition to waiting for human confirmation
             self.state = DoorState.WAIT_HUMAN
+            rospy.loginfo("Waiting for human confirmation on /door/human_confirm...")
 
     def send_post_door_goal(self):
         rospy.loginfo("Sending post-door goal")
@@ -344,10 +476,21 @@ class DoorCoordinator:
 
             elif self.state == DoorState.APPROACHING_DOOR:
                 self.check_pre_door_reached()
+            
+            elif self.state == DoorState.WAIT_HUMAN:
+                # Waiting for human confirmation via /door/human_confirm topic
+                # When confirmed, human_confirm_callback sets door_handled=True
+                if self.door_handled:
+                    rospy.loginfo("Human confirmed door is safe to traverse")
+                    self.send_post_door_goal()
+                    self.door_handled = False  # Reset for next door
 
             elif self.state == DoorState.TRAVERSING:
                 if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:
-                    rospy.loginfo("Door traversal complete")
+                    rospy.loginfo("Door traversal complete, resuming original goal")
+                    if self.original_goal:
+                        self.send_goal(self.original_goal)  # Resume original navigation
+                        self.original_goal = None  # Clear saved goal
                     self.state = DoorState.NAVIGATING
             rate.sleep()
 

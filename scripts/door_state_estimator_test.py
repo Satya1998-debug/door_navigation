@@ -4,7 +4,7 @@ from ollama import chat
 import cv2
 import numpy as np
 from door_ros_interfaces import DoorDetector
-from door_navigation.scripts.door_pose_estimator_test import *
+from door_pose_estimator_test import *
 from utils.visualization import visualize_door_passability, visualize_roi
 from utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
 
