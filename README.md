@@ -33,7 +33,17 @@ EOF
 
 ```
 
-### inatllation steps for realsense ros wrapper
+### install deps for ROS OpenCV
+```bash
+sudo apt update
+sudo apt install -y \
+libopencv-dev \
+ros-noetic-cv-bridge \
+ros-noetic-image-transport \
+ros-noetic-image-proc
+```
+
+### installation steps for realsense ros wrapper
 
 - follow instructions from https://github.com/realsenseai/realsense-ros/tree/ros1-legacy?tab=readme-ov-file
 - connect camera and ready to go
