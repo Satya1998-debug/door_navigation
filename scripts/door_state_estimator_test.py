@@ -1,4 +1,11 @@
 
+import ctypes
+# Fix for PyTorch libgomp TLS allocation issue - preload libgomp before torch imports
+try:
+    ctypes.CDLL("libgomp.so.1", mode=ctypes.RTLD_GLOBAL)
+except OSError:
+    pass  # libgomp already loaded or not found
+
 import base64
 from ollama import chat
 import cv2
