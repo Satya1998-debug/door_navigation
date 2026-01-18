@@ -16,7 +16,6 @@ uv venv --python 3.10 ~/MT/uv_ros_py10
 ```bash
 git clone git@github.com:ros-perception/vision_opencv.git -b noetic 
 ```
-- keep only cv_bridge folder and delete others from vision_opencv
 - build cv_bridge for python 3.8 explicitly [IMPORTANT]
 - clone the cv_bridge repo into src folder of catkin_ws (but only noetic branch)
 - build cv_bridge with the following command from catkin_ws directory
