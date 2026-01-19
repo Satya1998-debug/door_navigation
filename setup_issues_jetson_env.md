@@ -1,5 +1,8 @@
-Here is **everything in ONE single `.md` file**, clean and ready to save as e.g.
-`JETSON_SETUP_NOTES.md` 👇
+
+### Jetson command for GPU usage check
+```bash
+sudo tegrastats | awk -F'GR3D_FREQ ' '{if (NF>1) {split($2,a,"%"); print "GPU:", a[1]"%"}}'
+```
 
 ````md
 # Jetson Orin – Python, CUDA & ML Stack Issues (Summary & Fixes)

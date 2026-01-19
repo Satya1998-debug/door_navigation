@@ -1,3 +1,4 @@
+import time
 import rospkg
 import sys, os
 import numpy as np
@@ -263,19 +264,21 @@ def compute_door_3d_pose_from_detection(rgb_image, depth_image, door_box, door_d
         traceback.print_exc()
         return None, None, None
 
-def test_pose_estimator(img_path):
+def test_pose_estimator(img_path, visualize=True):
     # loads RGB 
     from door_ros_interfaces import DoorDetector
     rgb_rs = cv2.imread(img_path) # numpy array HWC
 
     door_detector = DoorDetector()
     # get RAW depth from DepthAnything model (in meters)
+    s_time = time.time()
     depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs)
+    print(f"DAv2 inference time: {time.time() - s_time:.3f} seconds")
     # apply correction to depth_da_raw using pre-computed calibration coefficients
     depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
 
     # get bounding box, make detection object
-    detections = door_detector.run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
+    detections = door_detector.run_yolo_model(rgb_image=rgb_rs, visualize=visualize) # runs YOLO model and returns detections
 
     # decide the door type based on detection (single/double)
     # since door state estimation will run infront of the door, we assume only one door is present in the scene
@@ -288,17 +291,19 @@ def test_pose_estimator(img_path):
     door_type = door_detections[0][1]
     print(f"Detected door type: {door_type}, bbox: {door_box['bbox']}")
 
+    s_time = time.time()
     compute_door_3d_pose_from_detection(rgb_image=rgb_rs, 
                                         depth_image=depth_da_corr, 
                                         door_box=door_box,
                                         door_detector=door_detector,
                                         door_type=door_type,
-                                        visualize=True)
+                                        visualize=visualize)
+    print(f"Door pose estimation time: {time.time() - s_time:.3f} seconds")
 
 
 if __name__ == "__main__":
 
     img_id = 63
     # loads RGB 
-    IMAGE_PATH = f"/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_{img_id}.jpg"
-    test_pose_estimator(IMAGE_PATH)
+    IMAGE_PATH = f"/home/ias/satya/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_{img_id}.jpg"
+    test_pose_estimator(IMAGE_PATH, visualize=False)

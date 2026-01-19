@@ -387,9 +387,7 @@ def estimate_door_state(img_path, depth_path, visualize=True, use_vlm=False):
         depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
 
         # get bounding box, make detection object
-        s_time = time.time()
         detections = door_detector.run_yolo_model(rgb_image=rgb_rs, visualize=visualize) # runs YOLO model and returns detections
-        print(f"Door YOLO detection time: {time.time() - s_time:.2f} seconds")
         # decide the door type based on detection (single/double)
         # since door state estimation will run infront of the door, we assume only one door is present in the scene
         door_detections = [(item, LABEL_MAP[item["cls_id"]]) for item in detections if item["cls_id"] in [0, 1]]  # class_id 0 is door_double, class_id 1 is door_single

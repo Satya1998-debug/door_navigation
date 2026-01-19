@@ -124,9 +124,10 @@ class DoorDetector:
                        rgb_image=None, 
                        img_size=IMG_SIZE, 
                        confidence_threshold=CONFIDENCE_THRESHOLD,
-                       visualize=True):
+                       visualize=False):
         try:
             from ultralytics import YOLO
+            import time
             
             if rgb_image is None:
                 print("No RGB image provided for YOLO model inference.")
@@ -141,7 +142,9 @@ class DoorDetector:
             detections = dict()
 
             # run inference
+            s_time = time.time()
             results = model(source=rgb_image, imgsz=img_size, conf=confidence_threshold, device=self.device)
+            print(f"YOLO inference completed in {time.time() - s_time:.3f} seconds.")
 
             # print results
             for result in results:
@@ -171,9 +174,9 @@ class DoorDetector:
                 })
 
             # write detections to json file
-            with open(os.path.join(DETECTION_JSON_PATH), 'w') as f:
-                import json
-                json.dump(detections, f, indent=4)
+            # with open(os.path.join(DETECTION_JSON_PATH), 'w') as f:
+            #     import json
+            #     json.dump(detections, f, indent=4)
 
             if visualize:
                 color_image = rgb_image.copy()
