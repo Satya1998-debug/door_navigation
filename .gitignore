@@ -9,5 +9,11 @@ scripts/calibration_dataset_ias
 
 # cloned repositories
 src/door_navigation/py_packages/*
-src/door_navigation/__pycache__
 
+# pycache files
+src/door_navigation/__pycache__
+scripts/utils/__pycache__
+scripts/__pycache__
+
+# ply files fpr testing
+*.ply

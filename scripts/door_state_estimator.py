@@ -7,9 +7,11 @@ except OSError:
     pass  # libgomp already loaded or not found
 
 import base64
+import time
 from ollama import chat
 import cv2
 import numpy as np
+from door_ros_interfaces import DoorDetector
 from door_pose_estimator import fit_plane, project_to_3d, visualize_plane_with_normal
 from utils.visualization import visualize_door_passability, visualize_roi
 from utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
@@ -42,55 +44,36 @@ def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent=""
         img_b64 = base64.b64encode(rgb_img_bytes).decode('utf-8')
 
         prompt = f"""
-            You are a robot perception assistant.
+            You are a robot perception assistant. Visually verify the door state in the image.
 
-            Your task is to VISUALLY VERIFY the door state in the image.
-            You are NOT the primary decision maker.
+            Classify door state as: "open", "semi_open", "closed", or "unknown"
+            Detect if a human is clearly visible near the door.
 
-            Classify the door state using ONLY one of:
-            - "open"
-            - "semi_open"
-            - "closed"
-            - "unknown"
-
-            Also detect whether a human is clearly visible.
-
-            You may use the following preliminary information (may be noisy):
-            - is door passable: {is_passable}
-            - door_open_percent (only in single door): {door_open_percent}
-            - door_wall_angle (only in single door): {door_wall_angle}
-            - left_right_door_angle (only in double door): {left_right_door_angle}
-            - door_type: {door_type}
+            Preliminary data (may be noisy):
+            - is_passable: {is_passable}, open_percent: {door_open_percent}, wall_angle: {door_wall_angle}
+            - lr_angle: {left_right_door_angle}, type: {door_type}
 
             Rules:
-            - If the door is clearly closed, choose "closed".
-            - If the door is fully open or no door leaf blocks the opening, choose "open".
-            - If the door is partially open, choose "semi_open".
-            - If the image is ambiguous or occluded, choose "unknown".
-            - If a human is visible near the door, set human_present = "yes", otherwise "no".
-            - If someone is in the path of the door, consider them present and request them to clear the way.
-            - Do NOT guess human intent.
-            - Do NOT explain your reasoning.
-            - Do NOT output anything except the JSON object.
+            - Fully open or unobstructed → "open"
+            - Partially open → "semi_open"
+            - Clearly closed → "closed"
+            - Ambiguous/occluded → "unknown"
+            - Human visible → "yes", otherwise "no"
 
-            Then generate a SHORT, polite, single-sentence spoken request appropriate for the situation:
-            - If closed and human present → request to open the door.
-            - If partly_open and human present → request to open the door more.
-            - If open and human present → request to keep the door open.
-            - If no human present → polite neutral message or empty string.
-
-            Output STRICTLY in the following JSON format:
+            Generate a SHORT, polite spoken sentence ALWAYS:
+            - If human present → request appropriate action (open door, open more, or keep open)
+            - If no human → briefly describe the door scene (e.g., "The door appears closed" or "I see an open doorway"), then request if anyone can please open.
+            
+            Output ONLY valid JSON:
             {{
-            "door_state": "<open|semi_open|closed|unknown>",
-            "human_present": "<yes|no>",
-            "conversation": "<single short sentence or empty string>"
+                "door_state": "<open|semi_open|closed|unknown>",
+                "human_present": "<yes|no>",
+                "conversation": "<single short sentence, always required>"
             }}
             """
 
-
         response = chat(
-            # model='qwen3-vl:4b',
-            model='qwen3-vl:2b-instruct-q8_0',
+            model='qwen3-vl:4b-instruct',
             messages=[
                 {
                     'role': 'user',
@@ -113,7 +96,7 @@ def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent=""
         res = response.message.content.strip().lower()
         if res:
             door_state = res
-            print(f"Estimated door state: {door_state}")
+            # print(f"Estimated door state (VLM): {door_state}")
             return door_state
         else:
             print("No valid response received from Ollama API.")
@@ -270,8 +253,10 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
             visualize_roi(rgb_rs, door_bbox, roi_depth)
         
         # fit plane for door
+        s_time = time.time()
         points_3d_door = project_to_3d(x1, y1, valid_mask=None, depth=roi_depth)
         door_inliers, door_n, _ = fit_plane(points_3d_door, "singledoor_roi_plane-door")
+
         # visualize door plane with normal
         if visualize:
             visualize_plane_with_normal(door_inliers, normal_vector=door_n)
@@ -280,6 +265,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         x1_o, y1_o, _, _ = outer_bbox
         points_3d_wall = project_to_3d(x1_o, y1_o, valid_mask=exp_mask, depth=full_depth)
         wall_inliers, wall_n, _ = fit_plane(points_3d_wall, "singledoor_roi_plane-wall")
+        
         # visualize wall plane with normal
         if visualize:
             visualize_plane_with_normal(wall_inliers, normal_vector=wall_n)
@@ -287,10 +273,12 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         # calculate door opening angle
         door_opening_angle = calculate_door_opening_angle(door_n, wall_n)
         print(f"Estimated door opening angle: {door_opening_angle} degrees")
+        print(f"Plane fitting & angle calculation time: {time.time() - s_time:.2f} seconds")
 
         # door pass check
+        s_time = time.time()
         is_passable = is_door_passable(full_depth, door_bbox, FX, CX, visualize=visualize, visualize_3d=visualize)
-
+        print(f"Door passability check time: {time.time() - s_time:.2f} seconds")
         # door state, open percent (NOTE: geometrically to take decision)
         door_state, door_open_percent = calculate_door_state_single(door_opening_angle)
         print(f"Door state based on angle thresholds: {door_state}, open percent: {door_open_percent:.2f}%")
@@ -298,10 +286,12 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         # VLM based door state estimation (falls back to geometric)
 
         if use_vlm:
+            s_time = time.time()
             door_state_vlm = estimate_door_state_ollama_vlm(rgb_rs, is_passable=is_passable, 
                                                             door_open_percent=door_open_percent,
                                                             door_wall_angle=door_opening_angle,
                                                             door_type="single")
+            print(f"VLM door state estimation time: {time.time() - s_time:.2f} seconds")
             return door_state_vlm
 
         # TODO: Audio generation based on door state and human presence (door_state_vlm output)
@@ -327,13 +317,17 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         print(f"Image dimensions: width={img_width}, height={img_height}")
 
         # divide the double door bbox into two single door bboxes
-        left_bbox, right_bbox = divide_bbox(rgb_rs, x1, x2, y1, y2, exp_ratio=EXPANSION_RATIO, img_width=img_width, img_height=img_height)
+        left_bbox, right_bbox = divide_bbox(rgb_rs, x1, x2, y1, y2, 
+                                            exp_ratio=EXPANSION_RATIO, 
+                                            visualize_bbox=visualize,
+                                            img_width=img_width, img_height=img_height)
         print(f"Left door bbox: {left_bbox}, Right door bbox: {right_bbox}")
         
         if visualize: # visualize ROI
             visualize_roi(rgb_rs, door_bbox, roi_depth)
 
         # fit plane for left door
+        s_time = time.time()
         points_3d_door_left = project_to_3d(left_bbox[0], left_bbox[1], valid_mask=None, depth=roi_depth)
         door_l_inliners, door_l_n, _ = fit_plane(points_3d_door_left)
         if visualize:
@@ -348,18 +342,22 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         # calculate angle between two door normals
         side_doors_angle = calculate_door_opening_angle(door_l_n, door_r_n)
         print(f"Estimated door opening angle: {side_doors_angle} degrees")
+        print(f"Plane fitting & angle calculation time: {time.time() - s_time:.2f} seconds")
 
         # door pass check
+        s_time = time.time()
         is_passable = is_door_passable(full_depth, door_bbox, FX, CX, visualize=visualize, visualize_3d=visualize)
-
+        print(f"Door passability check time: {time.time() - s_time:.2f} seconds")
         # door state, open percent (NOTE: geometrically to take decision)
         door_state = calculate_door_state_double(side_doors_angle, is_passable=is_passable)
         
         # VLM based door state estimation
         if use_vlm:
+             s_time = time.time()
              door_state_vlm = estimate_door_state_ollama_vlm(rgb_rs, is_passable=is_passable, 
                                                             left_right_door_angle=side_doors_angle,
                                                             door_type="double")
+             print(f"VLM door state estimation time: {time.time() - s_time:.2f} seconds")
              return door_state_vlm
        
 
@@ -371,7 +369,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         print(f"Error in estimate_double_door_state: {e}")
         return None
 
-def estimate_door_state(img_path, depth_path, visualize=True):
+def estimate_door_state(img_path, depth_path, visualize=True, use_vlm=False):
     # NOTE: this is executed at the Pre-Pose stage, before robot moves through the door
     try:
         # loads RGB 
@@ -382,15 +380,16 @@ def estimate_door_state(img_path, depth_path, visualize=True):
 
         door_detector = DoorDetector()  # initialize door detector
         # get RAW depth from DA model (in meters)
+        s_time = time.time()
         depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs)
+        print(f"Depth Anything v2 inference time: {time.time() - s_time:.2f} seconds")
         # apply correction to depth_da_raw using pre-computed calibration coefficients
         depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
-        # depth_da_corr = depth_rs
 
         # get bounding box, make detection object
-        
-        detections = door_detector.run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
-
+        s_time = time.time()
+        detections = door_detector.run_yolo_model(rgb_image=rgb_rs, visualize=visualize) # runs YOLO model and returns detections
+        print(f"Door YOLO detection time: {time.time() - s_time:.2f} seconds")
         # decide the door type based on detection (single/double)
         # since door state estimation will run infront of the door, we assume only one door is present in the scene
         door_detections = [(item, LABEL_MAP[item["cls_id"]]) for item in detections if item["cls_id"] in [0, 1]]  # class_id 0 is door_double, class_id 1 is door_single
@@ -408,13 +407,17 @@ def estimate_door_state(img_path, depth_path, visualize=True):
 
         # NOTE: door estimation for Single Door
         if door_type == 'door_single':
-            door_state = estimate_single_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, full_depth, visualize=visualize, use_vlm=False)
+            door_state = estimate_single_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, 
+                                                    full_depth, visualize=visualize, 
+                                                    use_vlm=use_vlm)
             print(f"Estimated single door state: {door_state}")
             return door_state
 
         # NOTE: door estimation for Double Door
         elif door_type == 'door_double':
-            door_state = estimate_double_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, full_depth, visualize=visualize, use_vlm=False)
+            door_state = estimate_double_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, 
+                                                    full_depth, visualize=visualize, 
+                                                    use_vlm=use_vlm)
             print(f"Estimated double door state: {door_state}")
             return door_state
         else:
@@ -432,7 +435,7 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # single door: 19(normal-closed), 63(normal-semi-open), 66(glass-closed)
     # double door: 27(glass-closed), 30(glass-closed), 35(glass-semi-open)
-    img_id = 19
+    img_id = 63
     img_path = os.path.join(script_dir, f"data_new/latest_image_color_lab_{img_id}.jpg")
     depth_path = os.path.join(script_dir, f"data_new/latest_image_depth_lab_{img_id}.png")
-    estimate_door_state(img_path, depth_path)
+    estimate_door_state(img_path, depth_path, visualize=False, use_vlm=True)

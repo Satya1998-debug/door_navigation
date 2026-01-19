@@ -117,7 +117,8 @@ class DoorDetector:
         self.model_path = MODEL_PATH
         self.confidence_threshold = CONFIDENCE_THRESHOLD
         self.img_size = IMG_SIZE  # input image size for the model
-        self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
 
     def run_yolo_model(self, model_path=MODEL_PATH, 
                        rgb_image=None, 
@@ -205,9 +206,9 @@ class DoorDetector:
             from depth_anything_v2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
             
             # Disable xformers for CPU inference (xformers requires CUDA)
-            import depth_anything_v2.metric_depth.depth_anything_v2.dinov2_layers.attention as attn_module
-            if not torch.cuda.is_available():
-                attn_module.XFORMERS_AVAILABLE = False
+            # import depth_anything_v2.metric_depth.depth_anything_v2.dinov2_layers.attention as attn_module
+            # if not torch.cuda.is_available():
+            #     attn_module.XFORMERS_AVAILABLE = False
 
             model_configs = {
                 'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
@@ -216,18 +217,17 @@ class DoorDetector:
             }
 
             encoder = 'vits' # or 'vits', 'vitb'
-            dataset = 'hypersim' # 'hypersim' for indoor model, 'vkitti' for outdoor model
+            # 'hypersim' for indoor model, 'vkitti' for outdoor model
             max_depth = 20 # 20 for indoor model, 80 for outdoor model
 
             model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
             checkpoint_path = DEPTH_ANYTHING_V2_PATH
             
             # Set device
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=False))
-            model.to(device)
+            model.load_state_dict(torch.load(checkpoint_path, map_location=self.device, weights_only=False))
+            model.to(self.device)
             model.eval()
-            print(f"DepthAnythingV2 model loaded with checkpoint: {checkpoint_path} on {device}")
+            print(f"DepthAnythingV2 model loaded with checkpoint: {checkpoint_path} on {self.device}")
 
             if rgb_image is not None: # RGB image CV2 BGR format
                 print(f"Processing the provided RGB image")

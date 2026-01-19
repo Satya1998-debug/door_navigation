@@ -1,40 +1,37 @@
-#!/usr/bin/env python3
 """
 Simple test script for estimate_door_state_ollama_vlm function.
 Usage: python test_vlm_door_state.py <image_path> [options]
 """
 
 import argparse
+import time
 import cv2
 import base64
 from ollama import chat
 import json
 
 
-def test_vlm_door_state(image_path):
+def test_vlm_door_state(image_path, model):
     # Load image
     print(f"Loading image: {image_path}")
     rgb_img = cv2.imread(image_path)
     
     # Call VLM estimation
     print("Calling estimate_door_state_ollama_vlm...")
+    s_time = time.time()
     result = estimate_door_state_ollama_vlm(
+        model,
         rgb_img,
-        is_passable='',
-        door_open_percent='',
+        is_passable='False',
+        door_open_percent='14',
         door_wall_angle="",
-        left_right_door_angle='',
-        door_type=''
+        left_right_door_angle='25',
+        door_type='double'
     )
+    e_time = time.time()
+    print(f"Time taken: {e_time - s_time:.2f} seconds")
 
-    if result:
-        try:
-            result_json = json.loads(result)
-            print(json.dumps(result_json, indent=2))
-        except:
-            print(result)
-
-def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent="", door_wall_angle="", left_right_door_angle="", door_type=""):
+def estimate_door_state_ollama_vlm(model, rgb_img, is_passable="", door_open_percent="", door_wall_angle="", left_right_door_angle="", door_type=""):
     # directly use ollama api to estimate door state
     try:
         # Encode OpenCV image (BGR) as JPEG
@@ -75,8 +72,8 @@ def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent=""
 
 
         response = chat(
-            #model='qwen3-vl:2b-instruct-q8_0', # fast
-            model='qwen3-vl:4b-instruct',
+            model=model, # fast
+            # model='qwen3-vl:4b-instruct',
             messages=[
                 {
                     'role': 'user',
@@ -110,5 +107,15 @@ def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent=""
         return None
         
 if __name__ == "__main__":
-    image_path = "/home/RUS_CIP/st184744/codebase/door_navigation/scripts/data_new/latest_image_color_lab_63.jpg"
-    test_vlm_door_state(image_path)
+    model_list = [ 
+                  #'qwen3-vl:4b', 
+                  'qwen3-vl:4b-instruct',
+                  #'qwen3-vl:2b-instruct-q4_K_M', 
+                  #'qwen3-vl:2b-instruct-q8_0',
+                  #'qwen2.5vl:7b'
+                  ]
+    for model in model_list:
+        print(f"Testing model: {model}")
+        img_id = 63 # Change this ID to test different images
+        image_path = f"/home/ias/satya/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_{img_id}.jpg"
+        test_vlm_door_state(image_path, model)
