@@ -1,3 +1,11 @@
+
+import ctypes
+# Fix for PyTorch libgomp TLS allocation issue - preload libgomp before torch imports
+try:
+    ctypes.CDLL("libgomp.so.1", mode=ctypes.RTLD_GLOBAL)
+except OSError:
+    pass  # libgomp already loaded or not found
+
 import base64
 from ollama import chat
 import cv2
@@ -10,13 +18,6 @@ FX = 385.88861083984375
 FY = 385.3906555175781
 CX = 317.80999755859375
 CY = 243.65032958984375
-
-import ctypes
-# Fix for PyTorch libgomp TLS allocation issue - preload libgomp before torch imports
-try:
-    ctypes.CDLL("libgomp.so.1", mode=ctypes.RTLD_GLOBAL)
-except OSError:
-    pass  # libgomp already loaded or not found
 
 ROBOT_WIDTH = 0.5  # in meters, robot width for door pass check
 EXPANSION_RATIO = 0.2  # ratio to expand door bbox for wall plane fitting
@@ -361,6 +362,9 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
                                                             door_type="double")
              return door_state_vlm
        
+
+        # TODO: Audio generation based on door state and human presence (door_state_vlm output)
+
         return door_state
 
     except Exception as e:
@@ -368,7 +372,6 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         return None
 
 def estimate_door_state(img_path, depth_path, visualize=True):
-    # NOT used currently (only for testing)
     # NOTE: this is executed at the Pre-Pose stage, before robot moves through the door
     try:
         # loads RGB 
@@ -377,14 +380,16 @@ def estimate_door_state(img_path, depth_path, visualize=True):
         # loads depth map
         depth_rs = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0  # convert mm to meters
 
+        door_detector = DoorDetector()  # initialize door detector
         # get RAW depth from DA model (in meters)
-        depth_da = run_depth_anything_v2_on_image(rgb_image=rgb_rs)
+        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs)
         # apply correction to depth_da_raw using pre-computed calibration coefficients
-        depth_da_corr = get_corrected_depth_image(depth_da=depth_da, model="quad")
+        depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
         # depth_da_corr = depth_rs
 
         # get bounding box, make detection object
-        detections = run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
+        
+        detections = door_detector.run_yolo_model(rgb_image=rgb_rs) # runs YOLO model and returns detections
 
         # decide the door type based on detection (single/double)
         # since door state estimation will run infront of the door, we assume only one door is present in the scene
