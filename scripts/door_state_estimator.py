@@ -2,15 +2,21 @@ import base64
 from ollama import chat
 import cv2
 import numpy as np
-from door_navigation.scripts.door_pose_estimator import fit_plane, run_depth_anything_v2_on_image, get_corrected_depth_image, \
-            run_yolo_model, project_to_3d, visualize_plane_with_normal
+from door_pose_estimator import fit_plane, project_to_3d, visualize_plane_with_normal
 from utils.visualization import visualize_door_passability, visualize_roi
-from door_navigation.scripts.utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
+from utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
 
 FX = 385.88861083984375
 FY = 385.3906555175781
 CX = 317.80999755859375
 CY = 243.65032958984375
+
+import ctypes
+# Fix for PyTorch libgomp TLS allocation issue - preload libgomp before torch imports
+try:
+    ctypes.CDLL("libgomp.so.1", mode=ctypes.RTLD_GLOBAL)
+except OSError:
+    pass  # libgomp already loaded or not found
 
 ROBOT_WIDTH = 0.5  # in meters, robot width for door pass check
 EXPANSION_RATIO = 0.2  # ratio to expand door bbox for wall plane fitting
@@ -82,7 +88,8 @@ def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent=""
 
 
         response = chat(
-            model='qwen3-vl:4b',
+            # model='qwen3-vl:4b',
+            model='qwen3-vl:2b-instruct-q8_0',
             messages=[
                 {
                     'role': 'user',
@@ -396,13 +403,13 @@ def estimate_door_state(img_path, depth_path, visualize=True):
 
         # NOTE: door estimation for Single Door
         if door_type == 'door_single':
-            door_state = estimate_single_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, full_depth, visualize=visualize)
+            door_state = estimate_single_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, full_depth, visualize=visualize, use_vlm=False)
             print(f"Estimated single door state: {door_state}")
             return door_state
 
         # NOTE: door estimation for Double Door
         elif door_type == 'door_double':
-            door_state = estimate_double_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, full_depth, visualize=visualize)
+            door_state = estimate_double_door_state(door_box.get("bbox", []), rgb_rs, roi_depth, full_depth, visualize=visualize, use_vlm=False)
             print(f"Estimated double door state: {door_state}")
             return door_state
         else:
@@ -420,7 +427,7 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # single door: 19(normal-closed), 63(normal-semi-open), 66(glass-closed)
     # double door: 27(glass-closed), 30(glass-closed), 35(glass-semi-open)
-    img_id = 35
+    img_id = 19
     img_path = os.path.join(script_dir, f"data_new/latest_image_color_lab_{img_id}.jpg")
     depth_path = os.path.join(script_dir, f"data_new/latest_image_depth_lab_{img_id}.png")
     estimate_door_state(img_path, depth_path)

@@ -117,6 +117,7 @@ class DoorDetector:
         self.model_path = MODEL_PATH
         self.confidence_threshold = CONFIDENCE_THRESHOLD
         self.img_size = IMG_SIZE  # input image size for the model
+        self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
     def run_yolo_model(self, model_path=MODEL_PATH, 
                        rgb_image=None, 
@@ -125,7 +126,7 @@ class DoorDetector:
                        visualize=True):
         try:
             from ultralytics import YOLO
-
+            
             if rgb_image is None:
                 print("No RGB image provided for YOLO model inference.")
                 return
@@ -139,7 +140,7 @@ class DoorDetector:
             detections = dict()
 
             # run inference
-            results = model(source=rgb_image, imgsz=img_size, conf=confidence_threshold)
+            results = model(source=rgb_image, imgsz=img_size, conf=confidence_threshold, device=self.device)
 
             # print results
             for result in results:
