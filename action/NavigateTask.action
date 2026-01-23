@@ -1,0 +1,9 @@
+# Goal
+string target        # e.g. "door", "room_3", "person_alice"
+---
+# Result
+bool success
+string reason        # "arrived", "blocked", "timeout", etc
+---
+# Feedback
+string status        # optional: "navigating", "waiting", etc
