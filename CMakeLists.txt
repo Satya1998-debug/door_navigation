@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   actionlib_msgs
   actionlib
+  message_generation # needed for generating messages in case of services
 )
 
 ## System dependencies are found with CMake's conventions
@@ -56,18 +57,16 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 ## Generate services in the 'srv' folder
-# add_service_files(
-#   FILES
-#   Service1.srv
-#   Service2.srv
-# )
+add_service_files(
+  FILES
+  StartNavigation.srv
+)
 
 ## Generate actions in the 'action' folder
-add_action_files(
-  FILES
-  NavigateTask.action
-
-)
+# add_action_files(
+#   FILES
+#   NavigateTask.action
+# )
 
 ## Generate added messages and services with any dependencies listed here
 generate_messages(
@@ -112,6 +111,7 @@ catkin_package(
   std_msgs
   actionlib 
   actionlib_msgs
+  message_runtime
 )
 
 ###########
