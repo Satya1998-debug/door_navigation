@@ -66,3 +66,17 @@ NOTE: Only one mode can be active at a time, and cannot be switched during opera
 sudo su
 source 
 ```
+
+
+### Wireless connect between Go1 - Jetson (because 3D Lidar is using Ethernet port from Go1)
+- connect to the local Network from Go1 (Go1xxxxx), password: 00000000
+- ping the Go1 internal devices 
+```bash
+ping 192.168.123.161 # for RPI
+ping 192.168.123.15 # for jetson nano 15 (usd for navigation)
+```
+- export ros maste IP so that the ros nodes are visible
+```bash
+export ROS_MASTER_URI=http://192.168.123.15:11311
+export ROS_HOSTNAME=192.168.123.15
+```
