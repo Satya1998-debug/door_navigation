@@ -11,6 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   std_msgs
+  geometry_msgs
   actionlib_msgs
   actionlib
   message_generation # needed for generating messages in case of services
@@ -50,16 +51,17 @@ find_package(catkin REQUIRED COMPONENTS
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-# add_message_files(
-#   FILES
-#   Message1.msg
-#   Message2.msg
-# )
+add_message_files(
+  FILES
+  DoorDetection.msg
+  DoorPose.msg
+)
 
 ## Generate services in the 'srv' folder
 add_service_files(
   FILES
   StartNavigation.srv
+  EstimateDoorState.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -72,6 +74,7 @@ add_service_files(
 generate_messages(
   DEPENDENCIES
   std_msgs
+  geometry_msgs
   actionlib_msgs
 )
 
@@ -109,6 +112,7 @@ catkin_package(
   roscpp 
   rospy 
   std_msgs
+  geometry_msgs
   actionlib 
   actionlib_msgs
   message_runtime

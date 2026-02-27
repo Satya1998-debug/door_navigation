@@ -2,6 +2,7 @@
 
 import os
 import sys
+import traceback
 
 import rospkg
 import rospy
@@ -11,13 +12,12 @@ import math
 from enum import Enum
 
 from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PointStamped, Vector3Stamped
 from std_msgs.msg import Bool
 
 import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 import sensor_msgs.msg
-import geometry_msgs.msg
 
 # ------ path setup -----
 # Get package path using rospkg (works with rosrun)
@@ -36,6 +36,13 @@ import cv2
 import numpy as np
 
 TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
+# DOOR navigation parameters
+POST_DOOR_DISTANCE = 1.5  # meters after door
+PRE_DOOR_DISTANCE = 1.2   # meters before door
+DOOR_TRIGGER_DISTANCE = 2.0  # start door logic when closer than this
+LOOKAHEAD_POINTS = 80  # tune based on plan density
+
+
 
 class DoorState(Enum):
     # states for door navigation
@@ -50,6 +57,9 @@ class DoorState(Enum):
 class DoorCoordinator:
     def __init__(self):
         rospy.init_node("door_coordinator")
+        
+        self.test_mode = True  # Set test mode to True for debugging, all testing related code
+        
 
         # robot params for door navigation
         self.pre_door_distance = PRE_DOOR_DISTANCE    # before door
@@ -57,9 +67,9 @@ class DoorCoordinator:
         self.door_trigger_distance = DOOR_TRIGGER_DISTANCE  # start door logic when closer than this
 
         # states
-        self.state = DoorState.NAVIGATING
+        self.state = DoorState.NAVIGATING # initial state is always navigating, waiting for door on path
         self.current_plan = None # latest navigation plan
-        self.current_door_pose_map = None
+        # self.current_door_pose_map = None
         self.door_handled = False
         self.original_goal = None  # need to save original destination
         
@@ -69,13 +79,13 @@ class DoorCoordinator:
         
         # detection control
         self.frame_count = 0
-        self.detection_interval = 5  # Run YOLO every 5 frames to save computation
+        self.detection_interval = 10  # Run YOLO every 5 frames to save computation
         self.cached_detections = []  # Cache detections between intervals
         self.last_detection_time = rospy.Time.now()
 
         # buffer to receive TF transforms
-        # internally subscribes to /tf (published by LIO-SLAM everytime) /tf_static (published by robot_state_publisher once)
-        # map -> odom -> base_link -> (LIO-SLAM)
+        # internally subscribes to /tf (published by TEB everytime) /tf_static (published by robot_state_publisher once)
+        # map -> odom -> base_link -> (TEB planner)
         # base_link -> camera_link (fixed, from URDF robot state publisher)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer) 
@@ -84,7 +94,7 @@ class DoorCoordinator:
         rospy.Subscriber(TEB_GLOBAL_PLAN_TOPIC, Path, self.plan_callback, queue_size=1)
         
         # subscribe to human confirmation for door traversal
-        rospy.Subscriber("/door/human_confirm", Bool, self.human_confirm_callback, queue_size=1)
+        # rospy.Subscriber("/door/human_confirm", Bool, self.human_confirm_callback, queue_size=1)
 
         # move base client
         self.move_base_client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
@@ -94,7 +104,7 @@ class DoorCoordinator:
 
         rospy.loginfo("DoorCoordinator initialized")
 
-    def plan_callback(self, msg):
+    def plan_callback(self, msg): # gets current global plan
         # msg format: nav_msgs/Path
         self.current_plan = msg
 
@@ -102,11 +112,13 @@ class DoorCoordinator:
         try:
             # target=map, source=base_link, where is robot base_link in map frame/world frame
             # simply, where is source in target frame
-            tf = self.tf_buffer.lookup_transform("map", "base_link", rospy.Time(0),rospy.Duration(0.2))
-            pose = PoseStamped() # has position (x, y, z) and orientation (quaternion x, y, z, w)
-            pose.header.frame_id = "map"
+            tf = self.tf_buffer.lookup_transform("map", "base_link", rospy.Time(0), rospy.Duration(0.5))
+            pose = PoseStamped() # has Pose, which has position: (as Point- x, y, z) and orientation: (as Quaternion- x, y, z, w)
+            pose.header.frame_id = "map" # to which frame this pose belongs to (map frame)
+            pose.header.stamp = tf.header.stamp
             pose.pose.position.x = tf.transform.translation.x
             pose.pose.position.y = tf.transform.translation.y
+            pose.pose.position.z = tf.transform.translation.z
             pose.pose.orientation = tf.transform.rotation
             return pose
         except Exception as e:
@@ -118,154 +130,224 @@ class DoorCoordinator:
         if self.current_plan is None:
             return False
 
+        # robot pose in map frame
         robot_pose = self.get_robot_pose_in_map()
         if robot_pose is None:
             return False
         
-        # Get current RGB-D frame
+        # get current RGB-D frame
         rgb_image = self.rgbd_receiver.latest_frame_color
-        depth_image = self.rgbd_receiver.latest_frame_depth
+        depth_image_rs = self.rgbd_receiver.latest_frame_depth
         
-        if rgb_image is None or depth_image is None:
+        if rgb_image is None or depth_image_rs is None:
             return False
         
-        # Run YOLO detection at intervals to save computation
+        # YOLO detection at intervals to save computation
         self.frame_count += 1
         if self.frame_count % self.detection_interval == 0:
             rospy.loginfo("Running door detection on current frame")
-            self.cached_detections = self.door_detector.run_yolo_model(
-                rgb_image=rgb_image,
-                confidence_threshold=0.5,
-                visualize=False
-            )
+            # cache detections till next detection run
+            self.cached_detections = self.door_detector.run_yolo_model(rgb_image=rgb_image, confidence_threshold=0.5, visualize=False)
             self.last_detection_time = rospy.Time.now()
         
-        # Use cached detections if available
+        # use cached detections if available
         if len(self.cached_detections) == 0:
             return False
         
-        # Get best door detection (highest confidence)
-        best_door = max(self.cached_detections, key=lambda d: d['conf'])
+        # get best door detection (highest confidence)
+        #best_door = max(self.cached_detections, key=lambda d: d['conf'])
+        #rospy.loginfo(f"Best door detection: class={best_door['cls_id']}, conf={best_door['conf']:.2f}")
         
-        rospy.loginfo(f"Best door detection: class={best_door['cls_id']}, conf={best_door['conf']:.2f}")
-        
-        # Compute door 3D pose in map frame using SAME frame
-        door_pose_map = self.compute_door_pose_in_map_frame(best_door, rgb_image, depth_image)
-        if door_pose_map is None:
-            rospy.logwarn("Failed to compute door pose in map frame")
-            return False
-        
-        self.current_door_pose_map = door_pose_map
-        
-        # Check if door is on the planned path
-        return self.check_door_intersects_path(door_pose_map)
+        # there can be multiple detections, we should check each one for whether it intersects path, if any one does, we trigger door logic
+        for door_detection in self.cached_detections:
+
+            # get door pose in map
+            door_pose_map = self.compute_door_pose_in_map_frame(door_detection, rgb_image, depth_image_rs)
+            if door_pose_map is None:
+                rospy.logwarn("Failed to compute door pose in map frame")
+                continue
+            
+            # check if door pose intersects path, return on the first door that is in path
+            if self.check_door_intersects_path(door_pose_map, robot_pose):
+                return True
+            
+        return False
     
-    def compute_door_pose_in_map_frame(self, door_detection_dict, rgb_image, depth_image_mm):
+    def compute_door_pose_in_map_frame(self, door, rgb_image, depth_image_rs_mm):
 
         try:
-            depth_image = depth_image_mm.astype(np.float32) / 1000.0 # convert mm to meters
+            rospy.loginfo(f"Door detection for pose estimation: class={door['cls_id']}, conf={door['conf']:.2f}")
+            depth_image_rs = depth_image_rs_mm.astype(np.float32) / 1000.0 # convert mm to meters
             # Get door bounding box from YOLO detection dict
-            bbox = door_detection_dict['bbox']
+            bbox = door['bbox']
             x1, y1, x2, y2 = map(int, bbox)
             
             # Get door type from detection
-            door_cls_id = door_detection_dict.get('cls_id', 1)  # default to single door
+            door_cls_id = door.get('cls_id', 1)  # default to single door
             LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}
             door_type = LABEL_MAP.get(door_cls_id, 'door_single')
             rospy.loginfo(f"Door type detected: {door_type}")
-            
+                
             # Create door box dict for compute_door_3d_pose_from_detection
             door_box_dict = {"bbox": [x1, y1, x2, y2]}
-            
-            door_centre_camera, normal_vector = compute_door_3d_pose_from_detection(
-                rgb_image, 
-                depth_image, 
-                door_box_dict, 
-                self.door_detector,
-                door_type=door_type,
-                visualize_roi=False
-            )
-            
-            if door_centre_camera is None or normal_vector is None:
+                
+            door_centre_cam, normal_vector_cam, door_width = compute_door_3d_pose_from_detection(
+                    rgb_image, 
+                    depth_image_rs, 
+                    door_box_dict, 
+                    self.door_detector,
+                    door_type=door_type,
+                    visualize_roi=False
+                )
+                
+            if door_centre_cam is None or normal_vector_cam is None:
                 rospy.logwarn("Failed to compute door 3D pose from vision")
                 return None
-            
-            rospy.loginfo(f"Door detected in camera frame: center={door_centre_camera}, normal={normal_vector}")
-            
+                
+            rospy.loginfo(f"Door detected in camera frame: center={door_centre_cam}, width={door_width}")
+                
             # Transform from camera frame to map frame
-            door_pose_map = self.transform_camera_to_map(door_centre_camera, normal_vector)
-            
+            door_pose_map = self.transform_camera_to_map(door_centre_cam, normal_vector_cam)
+            # door_pose_map is a dict with "position": [x, y, z], "normal": [nx, ny, nz] in the map frame
+            door_pose_map["width"] = door_width  # add width to the map pose dict
             return door_pose_map
             
         except Exception as e:
             rospy.logerr(f"Error computing door pose: {e}")
-            import traceback
             traceback.print_exc()
             return None
     
-    def transform_camera_to_map(self, point_camera, normal_camera):
+    def transform_camera_to_map(self, door_centre_cam, door_normal_cam):
         """Transform door pose from camera frame to map frame using TF."""
         try:
-            # Get transform from camera to base_link
-            tf_camera_to_base = self.tf_buffer.lookup_transform(
-                "base_link", "camera_link", rospy.Time(0), rospy.Duration(0.5))
+            # Lookup composed transform directly: camera_link -> map
+            tf_cam_to_map = self.tf_buffer.lookup_transform("map", "camera_link", rospy.Time(0), rospy.Duration(0.5))
+
+            # Transform dooe centre point from camera to map frame
+            door_point_cam = PointStamped()  # for point tranformation only
+            door_point_cam.header.frame_id = "camera_link"
+            door_point_cam.header.stamp = rospy.Time.now()
+            door_point_cam.point.x = door_centre_cam[0]
+            door_point_cam.point.y = door_centre_cam[1]
+            door_point_cam.point.z = door_centre_cam[2]
+
+            door_point_map = tf2_geometry_msgs.do_transform_point(door_point_cam, tf_cam_to_map)
+
+            # transform normal vector from camera to map frame
+            door_normal_cam = Vector3Stamped()
+            door_normal_cam.header.frame_id = "camera_link"
+            door_normal_cam.header.stamp = rospy.Time.now()
+            door_normal_cam.vector.x = door_normal_cam[0]
+            door_normal_cam.vector.y = door_normal_cam[1]
+            door_normal_cam.vector.z = door_normal_cam[2]
+
+            door_normal_map = tf2_geometry_msgs.do_transform_vector3(door_normal_cam, tf_cam_to_map)
             
-            # Transform point
-            point_stamped = geometry_msgs.msg.PointStamped()
-            point_stamped.header.frame_id = "camera_link"
-            point_stamped.point.x = point_camera[0]
-            point_stamped.point.y = point_camera[1]
-            point_stamped.point.z = point_camera[2]
-            
-            point_base = tf2_geometry_msgs.do_transform_point(point_stamped, tf_camera_to_base)
-            
-            # Get transform from base_link to map
-            tf_base_to_map = self.tf_buffer.lookup_transform(
-                "map", "base_link", rospy.Time(0), rospy.Duration(0.5))
-            
-            point_map = tf2_geometry_msgs.do_transform_point(
-                geometry_msgs.msg.PointStamped(
-                    header=geometry_msgs.msg.Header(frame_id="base_link"),
-                    point=point_base.point),
-                tf_base_to_map)
-            
-            # Transform normal vector (rotation only)
-            # TODO: Properly transform normal vector using rotation matrix
-            
+            # Normalize and sanity-check normal vector
+            norm_door_normal_map = np.array([door_normal_map.vector.x, door_normal_map.vector.y, door_normal_map.vector.z], dtype=np.float64)
+            norm = np.linalg.norm(norm_door_normal_map)
+            if norm < 1e-6:
+                rospy.logwarn("Transformed normal vector has near-zero length")
+                return None
+            normalized_normal_vec = norm_door_normal_map / norm
+
+            # Sanity: ensure normal points roughly toward robot; flip if it points away
+            # only if testing
+            if self.test_mode == True:
+                try:
+                    robot_pose = self.get_robot_pose_in_map()
+                    if robot_pose is not None:
+                        door_pos = np.array([door_point_map.point.x, door_point_map.point.y, door_point_map.point.z], dtype=np.float64)
+                        robot_pos = np.array([robot_pose.pose.position.x, robot_pose.pose.position.y, robot_pose.pose.position.z], dtype=np.float64)
+                        to_robot = robot_pos - door_pos
+                        if np.linalg.norm(to_robot) > 1e-6:
+                            to_robot = to_robot / np.linalg.norm(to_robot)
+                            dot = float(np.dot(normalized_normal_vec, to_robot))
+                            if dot < 0:
+                                normalized_normal_vec = -normalized_normal_vec
+                                rospy.loginfo("Flipped normal to face robot after TF transform")
+                except Exception:
+                    pass
+
             return {
-                "position": [point_map.point.x, point_map.point.y, point_map.point.z],
-                "normal": normal_camera  # Simplified - should be transformed
+                "position": [door_point_map.point.x, door_point_map.point.y, door_point_map.point.z],
+                "normal": [float(normalized_normal_vec[0]), float(normalized_normal_vec[1]), float(normalized_normal_vec[2])]
             }
             
         except Exception as e:
             rospy.logwarn(f"TF transform failed: {e}")
             return None
     
-    def check_door_intersects_path(self, door_pose_map):
-        """Check if door position is close to any point on the planned path."""
-        if self.current_plan is None or len(self.current_plan.poses) == 0:
+
+    def orientation(self, a, b, c):
+        """Returns orientation of triplet (a,b,c):
+        0 -> colinear
+        1 -> clockwise
+        2 -> counterclockwise
+        """
+        val = (b[1] - a[1]) * (c[0] - b[0]) - \
+            (b[0] - a[0]) * (c[1] - b[1])
+        if abs(val) < 1e-9:
+            return 0
+        return 1 if val > 0 else 2
+
+
+    def segments_intersect(self, p1, p2, q1, q2):
+        """Check if segment p1-p2 intersects q1-q2"""
+        o1 = self.orientation(p1, p2, q1)
+        o2 = self.orientation(p1, p2, q2)
+        o3 = self.orientation(q1, q2, p1)
+        o4 = self.orientation(q1, q2, p2)
+
+        if o1 != o2 and o3 != o4:
+            return True
+
+        return False
+
+
+    def check_door_intersects_path(self, door_pose_map, robot_pose_map):
+
+        if self.current_plan is None or len(self.current_plan.poses) < 2:
             return False
-        
-        door_x = door_pose_map["position"][0]
-        door_y = door_pose_map["position"][1]
-        
-        # Check distance from door to each point on path
-        min_distance = float('inf')
-        for pose in self.current_plan.poses:
-            path_x = pose.pose.position.x
-            path_y = pose.pose.position.y
-            
-            dist = math.sqrt((door_x - path_x)**2 + (door_y - path_y)**2)
-            min_distance = min(min_distance, dist)
-        
-        # Door is considered "on path" if within threshold
-        DOOR_PATH_THRESHOLD = 1.5  # meters
-        is_on_path = min_distance < DOOR_PATH_THRESHOLD
-        
-        if is_on_path:
-            rospy.loginfo(f"Door detected on path (distance: {min_distance:.2f}m)")
-        
-        return is_on_path
+
+        # DOOR SPAN CALCULATION
+        xd, yd = door_pose_map["position"][:2] # door centre in map frame
+        door_yaw_map = math.atan2(door_pose_map["normal"][1], door_pose_map["normal"][0])
+        door_width = door_pose_map.get("width")  # default width if not available
+
+        # door span direction = perpendicular to door normal
+        # door_yaw is door normal direction, span is yaw + 90°
+        span_yaw = door_yaw_map + math.pi / 2.0
+
+        half_w = door_width / 2.0
+
+        door_p1 = (xd + half_w * math.cos(span_yaw), yd + half_w * math.sin(span_yaw))
+        door_p2 = (xd - half_w * math.cos(span_yaw), yd - half_w * math.sin(span_yaw))
+
+        # ROBOT LOCATION in the PLANNED PATH - find closest point on path to robot
+        path = self.current_plan.poses # list of PoseStamped, in map frame
+        rx = robot_pose_map.pose.position.x
+        ry = robot_pose_map.pose.position.y
+
+        closest_i = min(
+            range(len(path)),
+            key=lambda i: (path[i].pose.position.x - rx) ** 2 +
+                        (path[i].pose.position.y - ry) ** 2
+        )
+
+        # FUTURE PATH SEGMENTS only
+        end_i = min(len(path) - 1, closest_i + LOOKAHEAD_POINTS)
+
+        for i in range(closest_i, end_i):
+            ax = path[i].pose.position.x
+            ay = path[i].pose.position.y
+            bx = path[i + 1].pose.position.x
+            by = path[i + 1].pose.position.y
+
+            if self.segments_intersect((ax, ay), (bx, by), door_p1, door_p2):
+                return True
+
+        return False
 
     def compute_pre_door_goal(self):
         """Compute pre-door goal using vision-based door pose estimation."""
@@ -480,6 +562,7 @@ class DoorCoordinator:
             elif self.state == DoorState.WAIT_HUMAN:
                 # Waiting for human confirmation via /door/human_confirm topic
                 # When confirmed, human_confirm_callback sets door_handled=True
+                # TODO: need to implement HITL
                 if self.door_handled:
                     rospy.loginfo("Human confirmed door is safe to traverse")
                     self.send_post_door_goal()

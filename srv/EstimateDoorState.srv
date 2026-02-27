@@ -1,0 +1,7 @@
+# Request: empty (uses latest camera images)
+---
+# Response
+string door_state      # "open" | "closed" | "ajar" | "unknown"
+bool is_passable       # whether robot can traverse
+float32 confidence     # estimation confidence [0-1]
+string error_message   # empty if success, error description otherwise

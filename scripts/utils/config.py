@@ -33,10 +33,6 @@ MODEL_BBOX = "yolo_v5l"  # choose model for detection
 DEPTH_MODEL = "depth_anything_v2"  # choose model for depth estimation
 DEPTH_ANYTHING_V2_PATH = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_metric_hypersim_vits.pth')  # path to depth anything v2 model
 
-# DOOR navigation parameters
-POST_DOOR_DISTANCE = 1.5  # meters after door
-PRE_DOOR_DISTANCE = 1.2   # meters before door
-DOOR_TRIGGER_DISTANCE = 2.0  # start door logic when closer than this
 
 # CAMERA INTRINSICS (aligned depth to color), units in pixels
 FX = 385.88861083984375

@@ -124,6 +124,8 @@ def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             normal_vector = wall_normal
             # compute door center from wall inliers (median is robust to outliers)
             door_centre = np.median(wall_inliers, axis=0).astype(np.float32)
+            # get door width
+            door_width = compute_door_width(wall_inliers, normal_vector)
             # visualize normal vector
             if visualize:
                 visualize_plane_with_normal(wall_inliers, normal_vector)
@@ -140,18 +142,20 @@ def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
                 normal_vector = door_normal
                 # compute door center from door inliers
                 door_centre = np.median(door_inliers, axis=0).astype(np.float32)
+                # get door width
+                door_width = compute_door_width(door_inliers, normal_vector)
                 # visualize normal vector
                 if visualize:
                     visualize_plane_with_normal(door_inliers, normal_vector)
             else:
                 print("[Single Door] Full door plane fit also failed, cannot estimate normal vector")
-                return None, None
-    
-        return normal_vector, door_centre
+                return None, None, None
+            
+        return normal_vector, door_centre, door_width
 
     except Exception as e:
         print(f"Error in get_normal_vector_single_door: {e}")
-        None
+        return None, None, None
 
 def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visualize=False):
     try:
@@ -197,7 +201,7 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
 
         points_3d_r = project_to_3d(int(r_x1), int(r_y1), depth=roi_depth_r)
         r_inliers, r_door_n, _ = fit_plane(points_3d_r, "")
-
+        
         if visualize:
             if r_door_n is not None:
                 visualize_plane_with_normal(r_inliers, r_door_n)
@@ -214,30 +218,55 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             combined_inliers = np.vstack((l_inliers, r_inliers))
             door_centre = np.median(combined_inliers, axis=0).astype(np.float32)
             
+            # get width from combined inliers
+            door_width = compute_door_width(combined_inliers, normal_vector)
+            
             if visualize:
                 visualize_plane_with_normal(combined_inliers, normal_vector)
                 
             # Apply forward direction constraint for safety
-            return normal_vector, door_centre
+            return normal_vector, door_centre, door_width
         elif l_door_n is not None:
             print("Right plane fit failed, using left door normal with constraint")
             normal_vector = l_door_n
             door_centre = np.median(l_inliers, axis=0).astype(np.float32)
-            return normal_vector, door_centre
+            # width from left inliers only
+            door_width = compute_door_width(l_inliers, normal_vector)
+            return normal_vector, door_centre, door_width
         elif r_door_n is not None:
             print("Left plane fit failed, using right door normal with constraint")
             normal_vector = r_door_n
             door_centre = np.median(r_inliers, axis=0).astype(np.float32)
-            return normal_vector, door_centre
+            door_width = compute_door_width(r_inliers, normal_vector)
+            return normal_vector, door_centre, door_width
         else:
             print("Both left and right plane fits failed, cannot compute door pose")
-            return None, None
+            return None, None, None
 
     except Exception as e:
         print(f"Error in get_normal_vector_double_door: {e}")
-        return None, None
+        return None, None, None
+    
+def compute_door_width(inliers, normal_vector):
+    """
+    Compute door width from 3D inlier points.
+    Assumes map Z axis is vertical.
+    """
+    try:
+        vertical_up = np.array([0, -1, 0]) # optical up frame
+        width_dir = np.cross(vertical_up, normal_vector)
+        width_dir /= np.linalg.norm(width_dir)
+        projections = inliers @ width_dir
+        projections = np.sort(projections)
+        k = int(0.05 * len(projections))  # trim outliers
+        width = projections[-k] - projections[k]
+        return float(width) # width in meters
 
-def compute_door_3d_pose_from_detection(rgb_image, depth_image, door_box, door_detector, 
+    except Exception as e:
+        print(f"Error computing door width: {e}")
+        return None
+
+def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, door_detector, 
                                         door_type='door_single', visualize=True):
     try:
         # get RAW depth from DepthAnything model (in meters)
@@ -249,14 +278,14 @@ def compute_door_3d_pose_from_detection(rgb_image, depth_image, door_box, door_d
         bbox = door_box["bbox"]
         x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
 
-        # For single doors, use wall normal instead of door normal for safer navigation
+        # for single doors, use wall normal instead of door normal for safer navigation
         # This prevents robot from going into walls when door is partly open
         if door_type == 'door_single':
-            normal_vector, door_centre = get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, depth_da_corr, visualize=visualize)
-        else:
-            normal_vector, door_centre = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_da_corr, visualize=visualize)
+            normal_vector, door_centre, door_width = get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, depth_da_corr, visualize=visualize)
+        else: # for double doors, use angle bisector of left and right door normals
+            normal_vector, door_centre, door_width = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_da_corr, visualize=visualize)
         
-        return door_centre, normal_vector
+        return door_centre, normal_vector, door_width
 
     except Exception as e:
         print(f"Error computing door 3D pose: {e}")
