@@ -16,6 +16,8 @@ from enum import Enum
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
+from tf.transformations import quaternion_from_euler
+
 import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
@@ -32,11 +34,7 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 from utils.config import *
-from door_pose_estimator import get_pre_door_pose
-from door_state_estimator import estimate_single_door_state, estimate_double_door_state
-
-TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
-LOOKAHEAD_POINTS = 50  # How many path points to check ahead
+from door_pose_estimator import get_post_door_pose, get_pre_door_pose
 
 
 class DoorState(Enum):
@@ -52,32 +50,30 @@ class DoorCoordinator:
     def __init__(self):
         rospy.init_node("door_coordinator")
         
-        # Parameters
         self.pre_door_distance = PRE_DOOR_DISTANCE
         self.post_door_distance = POST_DOOR_DISTANCE
         
-        # State
-        self.state = DoorState.NAVIGATING
+        self.state = DoorState.NAVIGATING # default state
         self.current_plan = None
-        self.latest_door_poses = []  # Latest door poses from perception
-        self.current_door_pose_map = None  # Door we're currently handling
+        self.latest_door_poses = []  # latest door poses from perception for one detection, poses are calculated as and when the are detected
+        self.current_door_pose_map = None  # currently handled door
         self.door_handled = False
         self.original_goal = None
         
-        # TF
+        # TF listerner setup
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         
-        # Subscribe to door poses (from door_pose_estimator_node)
-        rospy.Subscriber("/door/poses", DoorPose, self.door_pose_callback, queue_size=10)
+        # subscribe to door poses (from door_pose_estimator_node)
+        rospy.Subscriber(DOOR_POSE_TOPIC, DoorPose, self.door_pose_callback, queue_size=10)
         
-        # Subscribe to global plan
+        # subscribe to global plan
         rospy.Subscriber(TEB_GLOBAL_PLAN_TOPIC, Path, self.plan_callback, queue_size=1)
         
-        # Subscribe to human confirmation
+        # subscribe to human confirmation
         rospy.Subscriber("/door/human_confirm", Bool, self.human_confirm_callback, queue_size=1)
         
-        # Move base client
+        # move_base client
         self.move_base_client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
         rospy.loginfo("Waiting for move_base...")
         self.move_base_client.wait_for_server()
@@ -93,7 +89,7 @@ class DoorCoordinator:
             rospy.logwarn("Door state estimator service not available, will skip state checks")
             self.door_state_service = None
         
-        rospy.loginfo("DoorCoordinator initialized (refactored)")
+        rospy.loginfo("DoorCoordinator initialized")
     
     def door_pose_callback(self, msg):
         """Cache latest door poses"""
@@ -107,10 +103,8 @@ class DoorCoordinator:
             "timestamp": msg.header.stamp
         }
         
-        # Keep only recent poses (last 2 seconds)
-        now = rospy.Time.now()
-        self.latest_door_poses = [p for p in self.latest_door_poses 
-                                   if (now - p["timestamp"]).to_sec() < 2.0]
+        # only last 2 secs are kept
+        self.latest_door_poses = [p for p in self.latest_door_poses if (rospy.Time.now() - p["timestamp"]).to_sec() < 2.0]
         self.latest_door_poses.append(door_pose)
     
     def plan_callback(self, msg):
@@ -118,7 +112,7 @@ class DoorCoordinator:
     
     def human_confirm_callback(self, msg):
         try:
-            self.door_handled = bool(msg.data)
+            self.door_handled = bool(msg.data) # True if human confirms door is safe to traverse
             rospy.loginfo(f"Human confirmation received: {self.door_handled}")
         except Exception as e:
             rospy.logwarn(f"Invalid human confirm message: {e}")
@@ -147,10 +141,8 @@ class DoorCoordinator:
         if robot_pose is None:
             return False
         
-        # Check each door pose
         for door_pose in self.latest_door_poses:
             if self.check_door_intersects_path(door_pose, robot_pose):
-                # Save this door for processing
                 self.current_door_pose_map = door_pose
                 return True
         
@@ -183,7 +175,7 @@ class DoorCoordinator:
             key=lambda i: (path[i].pose.position.x - rx)**2 + (path[i].pose.position.y - ry)**2
         )
         
-        # Check future path segments only
+        # future path segments only
         end_i = min(len(path) - 1, closest_i + LOOKAHEAD_POINTS)
         
         for i in range(closest_i, end_i):
@@ -219,25 +211,21 @@ class DoorCoordinator:
             rospy.logwarn("No door pose available")
             return None
         
-        door_pos = self.current_door_pose_map["position"]
+        door_centre_pose = self.current_door_pose_map["position"]
         door_normal = self.current_door_pose_map["normal"]
         
-        door_centre = np.array(door_pos)
-        normal_vector = np.array(door_normal)
-        
-        pre_x, pre_y, pre_z, pre_yaw = get_pre_door_pose(
-            door_centre, normal_vector, offset_distance=self.pre_door_distance
-        )
+        pre_x, pre_y, pre_yaw = get_pre_door_pose(np.array(door_centre_pose), 
+                                                     np.array(door_normal), 
+                                                     offset_distance=self.pre_door_distance)
         
         goal = PoseStamped()
         goal.header.frame_id = "map"
         goal.header.stamp = rospy.Time.now()
         goal.pose.position.x = pre_x
         goal.pose.position.y = pre_y
-        goal.pose.position.z = 0.0
+        goal.pose.position.z = 0.0 # only 2D is considered for navigation
         
-        from tf.transformations import quaternion_from_euler
-        quat = quaternion_from_euler(0, 0, pre_yaw)
+        quat = quaternion_from_euler(0, 0, pre_yaw) # need to face the door, so convert yaw to quaternion
         goal.pose.orientation.x = quat[0]
         goal.pose.orientation.y = quat[1]
         goal.pose.orientation.z = quat[2]
@@ -252,17 +240,12 @@ class DoorCoordinator:
             rospy.logwarn("No door pose available")
             return None
         
-        door_pos = self.current_door_pose_map["position"]
+        door_centre_pose = self.current_door_pose_map["position"]
         door_normal = self.current_door_pose_map["normal"]
-        
-        door_centre = np.array(door_pos)
-        normal_vector = np.array(door_normal)
-        
-        # Go through the door (negative normal direction)
-        post_x = door_centre[0] - normal_vector[0] * self.post_door_distance
-        post_y = door_centre[1] - normal_vector[1] * self.post_door_distance
-        post_yaw = np.arctan2(-normal_vector[1], -normal_vector[0])
-        
+        # get post-door pose
+        post_x, post_y, post_yaw = get_post_door_pose(np.array(door_centre_pose), 
+                                                      np.array(door_normal), 
+                                                      offset_distance=self.post_door_distance)
         goal = PoseStamped()
         goal.header.frame_id = "map"
         goal.header.stamp = rospy.Time.now()
@@ -287,7 +270,7 @@ class DoorCoordinator:
         rospy.loginfo("Sent navigation goal")
     
     def trigger_pre_door(self):
-        if self.original_goal is None and self.current_plan:
+        if self.original_goal is None and self.current_plan: # save original goal to return to after door traversal
             self.original_goal = self.current_plan.poses[-1]
             rospy.loginfo("Saved original navigation goal")
         
@@ -301,14 +284,14 @@ class DoorCoordinator:
         if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:
             rospy.loginfo("Reached pre-door pose")
             
-            # Check door state via service
+            # door state via service is called (at pre-door pose)
             if self.door_state_service is not None:
                 try:
                     rospy.loginfo("Calling door state estimator service...")
                     response = self.door_state_service()
                     rospy.loginfo(f"Door state: {response.door_state}, passable: {response.is_passable}, confidence: {response.confidence}")
                     
-                    if response.is_passable:
+                    if response.is_passable:  # TODO need to re verify
                         rospy.loginfo("Door is passable, proceeding through")
                         self.send_post_door_goal()
                         return
@@ -328,7 +311,7 @@ class DoorCoordinator:
             self.state = DoorState.TRAVERSING
     
     def spin(self):
-        rate = rospy.Rate(10)  # 10 Hz - no blocking!
+        rate = rospy.Rate(10)
         while not rospy.is_shutdown():
             if self.state == DoorState.NAVIGATING:
                 if self.is_door_on_path():
@@ -339,10 +322,10 @@ class DoorCoordinator:
                 self.check_pre_door_reached()
             
             elif self.state == DoorState.WAIT_HUMAN:
-                if self.door_handled:
+                if self.door_handled: # this becomes true when human confirm callback updates it
                     rospy.loginfo("Human confirmed door is safe to traverse")
                     self.send_post_door_goal()
-                    self.door_handled = False
+                    self.door_handled = False # after door is handled, flag is reset for next door
             
             elif self.state == DoorState.TRAVERSING:
                 if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:
@@ -351,7 +334,6 @@ class DoorCoordinator:
                         self.send_goal(self.original_goal)
                         self.original_goal = None
                     self.state = DoorState.NAVIGATING
-            
             rate.sleep()
 
 

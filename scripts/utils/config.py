@@ -19,13 +19,21 @@ CAMERA_INFO_TOPIC = '/camera/color/camera_info'
 
 # ROS topics (detection)
 DOOR_DETECTION_TOPIC = "/door_detections"
+DOOR_POSE_TOPIC = "/door_poses"
 
+# DOOR navigation parameters
+TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
+POST_DOOR_DISTANCE = 1.5  # meters after door
+PRE_DOOR_DISTANCE = 1.2   # meters before door
+DOOR_TRIGGER_DISTANCE = 2.0  # start door logic when closer than this
+LOOKAHEAD_POINTS = 80  # tune based on plan density
 
 # detector parameters
 LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}
 MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.pt')  # path to door detection model # last_yolo8m.pt
 DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.json')  # path to save detection results
-CONFIDENCE_THRESHOLD = 0.5
+CONFIDENCE_THRESHOLD = 0.8
+DETECTION_RATE = 2.0  # Hz
 IMG_SIZE = 640  # input image size for the model
 YOLO_DETECTION_MODELS = ["yolo_11m", "yolo_v8l", "yolo_v8m", "yolo_v5l"]  # model name for detection
 DEPTH_ESTIMATION_MODELS = ["depth_anything_v2"]  # model name for depth estimation

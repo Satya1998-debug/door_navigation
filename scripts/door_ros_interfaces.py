@@ -88,11 +88,6 @@ class RGBDImageReciever:
             cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
             cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
 
-            # if cv_depth_image.dtype == np.uint16: # depth in 'mm'
-            #     cv_depth_image = cv_depth_image.astype(np.float32) / 1000.0
-            # else: # depth in 'm'
-            #     cv_depth_image = cv_depth_image.astype(np.float32)
-
             # always save depth in 'mm' as uint16, as it is standard for depth images
             if cv_depth_image.dtype == np.float32 or cv_depth_image.dtype == np.float64:
                 cv_depth_image = (cv_depth_image * 1000).astype(np.uint16) # convert to mm and uint16

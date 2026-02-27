@@ -27,13 +27,19 @@ MAX_FORWARD_DEVIATION_DEG = 45  # max deviation from camera forward direction (s
 
 
 def get_pre_door_pose(door_centre, normal_vector, offset_distance=1.0):
-    # not used currently
     door_centre_x, door_centre_y, door_centre_z = door_centre
     pre_x = door_centre_x + normal_vector[0] * offset_distance
     pre_y = door_centre_y + normal_vector[1] * offset_distance
-    pre_z = door_centre_z + normal_vector[2] * offset_distance
+    # pre_z = door_centre_z + normal_vector[2] * offset_distance # not used as we use 2D plan for navigation
     pre_yaw = np.arctan2(door_centre_y - pre_y, door_centre_x - pre_x) # yaw angle in radians
-    return pre_x, pre_y, pre_z, pre_yaw
+    return pre_x, pre_y, pre_yaw
+
+def get_post_door_pose(door_centre, normal_vector, offset_distance=1.0):
+    # need to go through the door (negative normal direction)
+    post_x = door_centre[0] - normal_vector[0] * offset_distance
+    post_y = door_centre[1] - normal_vector[1] * offset_distance
+    post_yaw = np.arctan2(-normal_vector[1], -normal_vector[0])
+    return post_x, post_y, post_yaw
 
 def compute_angle_bisector(normal1, normal2):
     bisector = (normal1 + normal2) / 2.0
@@ -266,6 +272,23 @@ def compute_door_width(inliers, normal_vector):
         print(f"Error computing door width: {e}")
         return None
 
+def get_final_depth(depth_rs, depth_da):
+    # RS depth is best for non-glass, so we just fill RS depth with DA depth where invalid RS depth (e.g., glass regions)
+    # This excludes the "glass holes" (0) and the far background
+    mask_reliable = (depth_rs > 0.6) & (depth_rs < 6.0) # valid range for camera D455
+
+    if np.any(mask_reliable):
+        # the scale difference between calibrated AI and the real sensor
+        # We use median to ignore outliers/noise
+        alignment_scale = np.median(depth_rs[mask_reliable]) / np.median(depth_da[mask_reliable])
+            
+        # Apply this frame-specific scale to the DA depth
+        depth_da_final = depth_da * alignment_scale
+    else:
+        # Fallback if the robot is looking at only glass
+        depth_da_final = depth_da
+    return depth_da_final
+
 def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, door_detector, 
                                         door_type='door_single', visualize=True):
     try:
@@ -273,6 +296,8 @@ def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, doo
         depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_image)
         # apply correction to depth_da_raw using pre-computed calibration coefficients
         depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
+        # get final depth image (corrected + scaled)
+        depth_da_final = get_final_depth(depth_image_rs, depth_da_corr)
         
         # actual bbox coordinates from detection
         bbox = door_box["bbox"]
@@ -281,9 +306,9 @@ def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, doo
         # for single doors, use wall normal instead of door normal for safer navigation
         # This prevents robot from going into walls when door is partly open
         if door_type == 'door_single':
-            normal_vector, door_centre, door_width = get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, depth_da_corr, visualize=visualize)
+            normal_vector, door_centre, door_width = get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, depth_da_final, visualize=visualize)
         else: # for double doors, use angle bisector of left and right door normals
-            normal_vector, door_centre, door_width = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_da_corr, visualize=visualize)
+            normal_vector, door_centre, door_width = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_da_final, visualize=visualize)
         
         return door_centre, normal_vector, door_width
 
@@ -322,7 +347,7 @@ def test_pose_estimator(img_path, visualize=True):
 
     s_time = time.time()
     compute_door_3d_pose_from_detection(rgb_image=rgb_rs, 
-                                        depth_image=depth_da_corr, 
+                                        depth_image=depth_da_final, 
                                         door_box=door_box,
                                         door_detector=door_detector,
                                         door_type=door_type,

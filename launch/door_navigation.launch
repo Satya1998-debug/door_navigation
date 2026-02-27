@@ -1,51 +1,18 @@
 <?xml version="1.0"?>
 <launch>
-    <!-- Door Navigation System Launch File -->
-    <!-- Starts detector, pose estimator, and coordinator nodes -->
     
-    <!-- Camera topics -->
-    <arg name="rgb_topic" default="/camera/color/image_raw"/>
-    <arg name="depth_topic" default="/camera/aligned_depth_to_color/image_raw"/>
-    <arg name="camera_info_topic" default="/camera/color/camera_info"/>
+    <!-- door detector Node -->
+    <node pkg="door_navigation" type="door_detector_node.py" name="door_detector_node" output="screen"/>
     
-    <!-- Detection parameters -->
-    <arg name="detection_rate" default="5.0"/>  <!-- Hz -->
-    <arg name="yolo_confidence_threshold" default="0.5"/>
+    <!-- Door Pose Estimator Node -->
+    <node pkg="door_navigation" type="door_pose_estimator_node.py" name="door_pose_estimator_node" output="screen"/>
     
-    <!-- Door traversal parameters -->
-    <arg name="pre_door_distance" default="0.8"/>  <!-- meters -->
-    <arg name="post_door_distance" default="1.0"/>  <!-- meters -->
+    <!-- Door State Estimator Service -->
+    <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
     
-    <!-- 1. Door Detector Node -->
-    <node pkg="door_navigation" type="door_detector_node.py" name="door_detector_node" output="screen">
-        <param name="rgb_topic" value="$(arg rgb_topic)"/>
-        <param name="detection_rate" value="$(arg detection_rate)"/>
-        <param name="confidence_threshold" value="$(arg yolo_confidence_threshold)"/>
-    </node>
+    <!-- Door Coordinator Node -->
+    <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/>
     
-    <!-- 2. Door Pose Estimator Node -->
-    <node pkg="door_navigation" type="door_pose_estimator_node.py" name="door_pose_estimator_node" output="screen">
-        <param name="rgb_topic" value="$(arg rgb_topic)"/>
-        <param name="depth_topic" value="$(arg depth_topic)"/>
-        <param name="camera_info_topic" value="$(arg camera_info_topic)"/>
-    </node>
-    
-    <!-- 3. Door State Estimator Service -->
-    <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen">
-        <param name="rgb_topic" value="$(arg rgb_topic)"/>
-        <param name="depth_topic" value="$(arg depth_topic)"/>
-        <param name="use_vlm" value="false"/>  <!-- Set to true to use vision-language model -->
-        <param name="visualize" value="false"/>  <!-- Set to true for debugging -->
-    </node>
-    
-    <!-- 4. Door Coordinator Node (refactored) -->
-    <node pkg="door_navigation" type="door_coordinator_refactored.py" name="door_coordinator" output="screen">
-        <param name="pre_door_distance" value="$(arg pre_door_distance)"/>
-        <param name="post_door_distance" value="$(arg post_door_distance)"/>
-    </node>
-    
-    <!-- Optional: RViz visualization -->
-    <!-- Uncomment to launch RViz with door visualization -->
     <!--
     <node pkg="rviz" type="rviz" name="door_navigation_rviz" 
           args="-d $(find door_navigation)/rviz/door_navigation.rviz"/>
