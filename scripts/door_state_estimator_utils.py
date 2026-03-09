@@ -12,7 +12,7 @@ from ollama import chat
 import cv2
 import numpy as np
 from door_ros_interfaces import DoorDetector
-from door_pose_estimator import fit_plane, project_to_3d, visualize_plane_with_normal
+from door_navigation.scripts.door_pose_estimator_utils import fit_plane, project_to_3d, visualize_plane_with_normal
 from utils.visualization import visualize_door_passability, visualize_roi
 from utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
 

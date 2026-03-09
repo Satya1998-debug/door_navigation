@@ -34,7 +34,7 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 from utils.config import *
-from door_pose_estimator import get_post_door_pose, get_pre_door_pose
+from door_navigation.scripts.door_pose_estimator_utils import get_post_door_pose, get_pre_door_pose
 
 
 class DoorState(Enum):

@@ -272,36 +272,3 @@ class DoorDetector:
             depth_corrected = apply_inverse_depth_correction(depth_da, coef, model=model)
             return depth_corrected
 
-
-class DoorDetectionPublisher:
-    # publisher class for door detection results (when required)
-    def __init__(self):
-        self.publisher = rospy.Publisher(DOOR_DETECTION_TOPIC, Detection2DArray, queue_size=10)
-        rospy.loginfo("Door Detection Publisher initialized, publishing to topic: %s", DOOR_DETECTION_TOPIC)
-
-    def publish_detections(self, detections_msg):
-        self.publisher.publish(detections_msg)
-        rospy.loginfo("Published %d door detections", len(detections_msg.detections))
-
-    def create_detections_msg(self, valid_boxes):
-        detections_msg = Detection2DArray() # array of Detection2D with fields header and detections
-        # detection header (has timestamp and frame_id)
-        detections_msg.header.stamp = rospy.Time.now()
-        detections_msg.header.frame_id = "camera_color_optical_frame"  # assuming this frame
-
-        for vb in valid_boxes:
-            detection = Detection2D()
-            detection.bbox.center.x = (vb['bbox'][0] + vb['bbox'][2]) / 2.0
-            detection.bbox.center.y = (vb['bbox'][1] + vb['bbox'][3]) / 2.0
-            detection.bbox.size_x = vb['bbox'][2] - vb['bbox'][0]
-            detection.bbox.size_y = vb['bbox'][3] - vb['bbox'][1]
-
-            hypothesis = ObjectHypothesisWithPose()
-            hypothesis.id = vb['cls_id']
-            hypothesis.score = vb['conf']
-
-            detection.results.append(hypothesis)
-            detections_msg.detections.append(detection)
-
-        return detections_msg
-

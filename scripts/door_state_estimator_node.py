@@ -22,7 +22,7 @@ if script_dir not in sys.path:
 
 from door_navigation.srv import EstimateDoorState, EstimateDoorStateResponse
 from door_navigation.msg import DoorPose
-from door_state_estimator import estimate_single_door_state, estimate_double_door_state
+from door_navigation.scripts.door_state_estimator_utils import estimate_single_door_state, estimate_double_door_state
 from door_ros_interfaces import RGBDImageReceiver
 
 

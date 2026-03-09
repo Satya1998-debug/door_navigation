@@ -27,7 +27,7 @@ import numpy as np
 import message_filters
 import threading
 
-from door_pose_estimator import compute_door_3d_pose_from_detection
+from door_navigation.scripts.door_pose_estimator_utils import compute_door_3d_pose_from_detection
 from door_ros_interfaces import DoorDetector
 from utils.config import (
     DOOR_DETECTION_TOPIC,
