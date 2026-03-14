@@ -137,30 +137,28 @@ class DoorStateEstimatorService:
 
             result = self.estimate_door_state_from_rgbd(rgb_img, depth_img)
             
+            """
+            result = {
+                'door_state': 'open',
+                'human_present': 'no',
+                'conversation': 'please open the door'
+                }
+            """
+            
             # Parse result
             if result is None:
                 response.door_state = "unknown"
                 response.is_passable = False
-                response.confidence = 0.0
                 response.error_message = "Door state estimation failed"
                 rospy.logwarn(response.error_message)
                 return response
             
-            if isinstance(result, dict):
-                door_state = result.get("door_state", "unknown")
-                response.door_state = door_state
-                response.is_passable = door_state in ["open", "semi_open"]
-                response.confidence = float(result.get("confidence", 0.0))
-                response.error_message = ""
-                rospy.loginfo(f"Door state: {door_state}, passable: {response.is_passable}")
-            else:
-                door_state = str(result)
-                response.door_state = door_state
-                response.is_passable = door_state in ["open", "semi_open"]
-                response.confidence = 0.0
-                response.error_message = ""
-                rospy.loginfo(f"Door state: {door_state}, passable: {response.is_passable}")
-            
+            door_state = result.get("door_state", "unknown")
+            response.door_state = door_state
+            response.conversation = result.get("conversation", "NA")
+            response.is_passable = result.get("is_passable", False)
+            response.error_message = ""
+            rospy.loginfo(f"Door state: {door_state}, passable: {response.is_passable}")
             return response
             
         except Exception as e:
@@ -209,7 +207,7 @@ class DoorStateEstimatorService:
             rospy.logerr(f"Error estimating bbox: {e}")
             return None
         
-    def estimate_door_state_from_rgbd(self, rgb_img, depth_img_rs, use_da=self.use_da):
+    def estimate_door_state_from_rgbd(self, rgb_img, depth_img_rs):
         """
         Run YOLO on current RGB frame, choose best door, then estimate door state.
         Returns a dict with door_state, confidence when successful, or None on failure.
@@ -237,7 +235,7 @@ class DoorStateEstimatorService:
             door_type = LABEL_MAP.get(cls_id, "door_single")
             
             # process depth image
-            if use_da:
+            if self.use_da:
                 # get RAW depth from DepthAnything model (in meters)
                 depth_da = self.door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_img)
                 # apply correction to depth_da_raw using pre-computed calibration coefficients
@@ -253,20 +251,22 @@ class DoorStateEstimatorService:
 
             if door_type == "door_double":
                 rospy.loginfo("Estimating double door state (re-detect)")
-                door_state = estimate_double_door_state(door_bbox, rgb_img, roi_depth, full_depth, visualize=self.visualize, use_vlm=self.use_vlm)
+                door_state_res = estimate_double_door_state(door_bbox, rgb_img, roi_depth, full_depth, 
+                                                        visualize=self.visualize, use_vlm=self.use_vlm)
             else:
                 rospy.loginfo("Estimating single door state (re-detect)")
-                door_state = estimate_single_door_state(door_bbox, rgb_img, roi_depth, full_depth, visualize=self.visualize, use_vlm=self.use_vlm)
-
-            if door_state is None:
-                return None
-            
-            door_state_response = {
-                "door_state": door_state if not isinstance(door_state, dict) else door_state.get("door_state", "unknown"),
-                "confidence": float(best_det.get("conf", 0.0))
-            }
-
-            return door_state_response
+                door_state_res = estimate_single_door_state(door_bbox, rgb_img, roi_depth, full_depth, 
+                                                        visualize=self.visualize, use_vlm=self.use_vlm)
+                
+            """
+            res = {
+                'door_state': 'open',
+                'human_present': 'no',
+                'conversation': 'please open the door',
+                'is_passable': True,
+                }
+            """
+            return door_state_res
 
         except Exception as e:
             rospy.logerr(f"Door state estimation failed: {e}")

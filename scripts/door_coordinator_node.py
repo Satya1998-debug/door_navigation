@@ -41,9 +41,7 @@ class DoorState(Enum):
     NAVIGATING = 0
     APPROACHING_DOOR = 1
     AT_PRE_DOOR = 2
-    WAIT_HUMAN = 3
-    TRAVERSING = 4
-    AT_POST_DOOR = 5
+    TRAVERSING = 3
 
 
 class DoorCoordinator:
@@ -57,7 +55,6 @@ class DoorCoordinator:
         self.current_plan = None
         self.latest_door_poses = []  # latest door poses from perception for one detection, poses are calculated as and when the are detected
         self.current_door_pose_map = None  # currently handled door
-        self.door_handled = False
         self.original_goal = None
         
         # TF listerner setup
@@ -71,7 +68,7 @@ class DoorCoordinator:
         rospy.Subscriber(TEB_GLOBAL_PLAN_TOPIC, Path, self.plan_callback, queue_size=1)
         
         # subscribe to human confirmation
-        rospy.Subscriber("/door/human_confirm", Bool, self.human_confirm_callback, queue_size=1)
+        # rospy.Subscriber("/door/human_confirm", Bool, self.human_confirm_callback, queue_size=1)
         
         # move_base client
         self.move_base_client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
@@ -113,12 +110,23 @@ class DoorCoordinator:
     def plan_callback(self, msg):
         self.current_plan = msg
     
-    def human_confirm_callback(self, msg):
+    def interact_with_human(self, conversation):
+        # operates in blocking mode
         try:
-            self.door_handled = bool(msg.data) # True if human confirms door is safe to traverse
-            rospy.loginfo(f"Human confirmation received: {self.door_handled}")
+            # SPEAK
+            rospy.loginfo(f"Interacting with human: {conversation}")
+            
+            # ASK FOR FEEDBACK
+            feedback = input("Is the door safe to traverse? (yes/no): ")
+            
+            # Check FEEDBACK
+            if "yes" in feedback.lower() or "sure" in feedback.lower() or "go ahead" in feedback.lower():
+                rospy.loginfo(f"Human confirmation received: {conversation}")
+                return True
+            return False
         except Exception as e:
             rospy.logwarn(f"Invalid human confirm message: {e}")
+            return False
     
     def get_robot_pose_in_map(self):
         try:
@@ -283,29 +291,44 @@ class DoorCoordinator:
             self.send_goal(pre_goal)
             self.state = DoorState.APPROACHING_DOOR
     
+    def perfrom_door_state_check(self):
+        # door state via service is called (at pre-door pose)
+        if self.door_state_service is not None:
+            try:
+                rospy.loginfo("Calling door state estimator service...")
+                response = self.door_state_service()
+                rospy.loginfo(f"Door state: {response.door_state}, passable: {response.is_passable}, conversation: {response.conversation}")
+                    
+                if response.is_passable and response.door_state == "open":
+                    rospy.loginfo("Door is passable, proceeding through")
+                    # Speech output can be added here using response.conversation if needed
+                    self.send_post_door_goal()
+                    return
+                else:
+                    # Human feedback, ask to open the door if not open # TODO
+                    approved = self.interact_with_human(response.conversation) # TODO: can pass conversation snippet from state estimator to use in human interaction
+                        
+                    # if YES, perform state eastimation again then proceed
+                    if approved:
+                        # response = self.door_state_service() # Dont scan 2nd time just traverse
+                        self.door_handled = True # passable and the door is handled
+                        # SPEAK that robot is proceeding through the door
+                        rospy.loginfo("Human confirmed door is safe to traverse")
+                        self.send_post_door_goal()
+                        return
+                            
+            except rospy.ServiceException as e:
+                rospy.logwarn(f"Door state service call failed: {e}")
+    
     def check_pre_door_reached(self):
         if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:
             rospy.loginfo("Reached pre-door pose")
             
-            # door state via service is called (at pre-door pose)
-            if self.door_state_service is not None:
-                try:
-                    rospy.loginfo("Calling door state estimator service...")
-                    response = self.door_state_service()
-                    rospy.loginfo(f"Door state: {response.door_state}, passable: {response.is_passable}, confidence: {response.confidence}")
-                    
-                    if response.is_passable:  # TODO need to re verify
-                        rospy.loginfo("Door is passable, proceeding through")
-                        self.send_post_door_goal()
-                        return
-                    else:
-                        rospy.loginfo(f"Door is {response.door_state}, waiting for human confirmation")
-                except rospy.ServiceException as e:
-                    rospy.logwarn(f"Door state service call failed: {e}")
-            
-            self.state = DoorState.WAIT_HUMAN
-            rospy.loginfo("Waiting for human confirmation on /door/human_confirm...")
-    
+            self.state = DoorState.AT_PRE_DOOR
+
+        # if not succeeded till now, that means the robot has not yet reached the Pre-door pose
+        # state == APPROACHING_DOOR is still valid
+        
     def send_post_door_goal(self):
         rospy.loginfo("Sending post-door goal")
         post_goal = self.compute_post_door_goal()
@@ -323,12 +346,9 @@ class DoorCoordinator:
             
             elif self.state == DoorState.APPROACHING_DOOR:
                 self.check_pre_door_reached()
-            
-            elif self.state == DoorState.WAIT_HUMAN:
-                if self.door_handled: # this becomes true when human confirm callback updates it
-                    rospy.loginfo("Human confirmed door is safe to traverse")
-                    self.send_post_door_goal()
-                    self.door_handled = False # after door is handled, flag is reset for next door
+                
+            elif self.state == DoorState.AT_PRE_DOOR:
+                self.perfrom_door_state_check()
             
             elif self.state == DoorState.TRAVERSING:
                 if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:

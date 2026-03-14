@@ -287,17 +287,16 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
 
         if use_vlm:
             s_time = time.time()
-            door_state_vlm = estimate_door_state_ollama_vlm(rgb_rs, is_passable=is_passable, 
+            door_state_res = estimate_door_state_ollama_vlm(rgb_rs, is_passable=is_passable, 
                                                             door_open_percent=door_open_percent,
                                                             door_wall_angle=door_opening_angle,
                                                             door_type="single")
             print(f"VLM door state estimation time: {time.time() - s_time:.2f} seconds")
-            return door_state_vlm
-
-        # TODO: Audio generation based on door state and human presence (door_state_vlm output)
+            door_state_res["is_passable"] = is_passable
+            return door_state_res
 
         # calculate post door pose
-        return door_state
+        return {"door_state": door_state, "human_present": "NA", "conversation": "NA", "is_passable": is_passable}
 
     except Exception as e:
         print(f"Error in estimate_single_door_state: {e}")
@@ -354,16 +353,15 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         # VLM based door state estimation
         if use_vlm:
              s_time = time.time()
-             door_state_vlm = estimate_door_state_ollama_vlm(rgb_rs, is_passable=is_passable, 
+             door_state_res = estimate_door_state_ollama_vlm(rgb_rs, is_passable=is_passable, 
                                                             left_right_door_angle=side_doors_angle,
                                                             door_type="double")
              print(f"VLM door state estimation time: {time.time() - s_time:.2f} seconds")
-             return door_state_vlm
+             door_state_res["is_passable"] = is_passable
+             return door_state_res
        
+        return {"door_state": door_state, "human_present": "NA", "conversation": "NA", "is_passable": is_passable}
 
-        # TODO: Audio generation based on door state and human presence (door_state_vlm output)
-
-        return door_state
 
     except Exception as e:
         print(f"Error in estimate_double_door_state: {e}")
