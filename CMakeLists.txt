@@ -55,6 +55,7 @@ add_message_files(
   FILES
   DoorDetection.msg
   DoorPose.msg
+  DoorPoseArray.msg
 )
 
 ## Generate services in the 'srv' folder

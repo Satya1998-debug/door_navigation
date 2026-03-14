@@ -129,7 +129,7 @@ def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             print(f"[Single Door] Using wall normal for pre-pose: [{wall_normal[0]:.3f}, {wall_normal[1]:.3f}, {wall_normal[2]:.3f}]")
             normal_vector = wall_normal
             # compute door center from wall inliers (median is robust to outliers)
-            door_centre = np.median(wall_inliers, axis=0).astype(np.float32)
+            door_centre = np.median(wall_inliers, axis=0).astype(np.float32) # x, y, z in camera frame
             # get door width
             door_width = compute_door_width(wall_inliers, normal_vector)
             # visualize normal vector
@@ -147,7 +147,7 @@ def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
                 print(f"[Single Door] Using door normal for pre-pose: [{door_normal[0]:.3f}, {door_normal[1]:.3f}, {door_normal[2]:.3f}]")
                 normal_vector = door_normal
                 # compute door center from door inliers
-                door_centre = np.median(door_inliers, axis=0).astype(np.float32)
+                door_centre = np.median(door_inliers, axis=0).astype(np.float32) # x, y, z in camera frame
                 # get door width
                 door_width = compute_door_width(door_inliers, normal_vector)
                 # visualize normal vector
@@ -157,7 +157,7 @@ def get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
                 print("[Single Door] Full door plane fit also failed, cannot estimate normal vector")
                 return None, None, None
             
-        return normal_vector, door_centre, door_width
+        return normal_vector, door_centre, door_width  # door centre (x, y, z) in camera frame
 
     except Exception as e:
         print(f"Error in get_normal_vector_single_door: {e}")
@@ -273,7 +273,7 @@ def compute_door_width(inliers, normal_vector):
         return None
 
 def get_final_depth(depth_rs, depth_da):
-    # RS depth is best for non-glass, so we just fill RS depth with DA depth where invalid RS depth (e.g., glass regions)
+    # RS depth is best for non-glass, so fill RS depth with DA depth where invalid RS depth (e.g., glass regions)
     # This excludes the "glass holes" (0) and the far background
     mask_reliable = (depth_rs > 0.6) & (depth_rs < 6.0) # valid range for camera D455
 
@@ -290,15 +290,17 @@ def get_final_depth(depth_rs, depth_da):
     return depth_da_final
 
 def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, door_detector, 
-                                        door_type='door_single', visualize=True):
+                                        door_type='door_single', visualize=True, use_da=False):
     try:
-        # get RAW depth from DepthAnything model (in meters)
-        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_image)
-        # apply correction to depth_da_raw using pre-computed calibration coefficients
-        depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
-        # get final depth image (corrected + scaled)
-        depth_da_final = get_final_depth(depth_image_rs, depth_da_corr)
-        
+        if use_da:
+            # get RAW depth from DepthAnything model (in meters)
+            depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_image)
+            # apply correction to depth_da_raw using pre-computed calibration coefficients
+            depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
+            # get final depth image (corrected + scaled)
+            depth_da_final = get_final_depth(depth_image_rs, depth_da_corr)  # TODO need to check
+        else: # while navigation, we can directly use the RS depth as it's more real-time and accurate for non-glass regions, and the robot will be close enough to the door for better depth readings
+            depth_da_final = depth_image_rs
         # actual bbox coordinates from detection
         bbox = door_box["bbox"]
         x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
@@ -310,7 +312,7 @@ def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, doo
         else: # for double doors, use angle bisector of left and right door normals
             normal_vector, door_centre, door_width = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_da_final, visualize=visualize)
         
-        return door_centre, normal_vector, door_width
+        return door_centre, normal_vector, door_width # door centre (x, y, z) in camera frame, normal vector (x, y, z), door width in meters
 
     except Exception as e:
         print(f"Error computing door 3D pose: {e}")

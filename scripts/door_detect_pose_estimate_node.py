@@ -21,7 +21,7 @@ import tf2_ros
 import tf2_geometry_msgs
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PointStamped, Vector3Stamped
-from door_navigation.msg import DoorDetection, DoorPose
+from door_navigation.msg import DoorDetection, DoorPose, DoorPoseArray
 from cv_bridge import CvBridge
 import numpy as np
 import message_filters
@@ -41,6 +41,9 @@ from utils.config import (
     DEPTH_TOPIC
 )
 
+POSE_PUB_QSIZE = 1
+RGB_SUB_QSIZE = 1
+DEPTH_SUB_QSIZE = 1
 
 class DoorDetectionAndPoseNode:
     """Combined node for door detection and 3D pose estimation"""
@@ -56,32 +59,27 @@ class DoorDetectionAndPoseNode:
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         
-        # Thread lock for safe processing
-        self.processing_lock = threading.Lock()
         self.is_processing = False
         
-        # Latest synchronized RGB-D
-        self.latest_rgb = None
-        self.latest_depth = None
         self.latest_stamp = None
         
         # Detection rate control
         self.last_detection_time = rospy.Time.now()
         
-        # standard 640×480 RGB image is about 0.9 MB., so buff_size is set to 16 MB to avoid dropping frames
-        self.rgb_sub = message_filters.Subscriber(RGB_TOPIC, Image, queue_size=10, buff_size=2**24)
-        self.depth_sub = message_filters.Subscriber(DEPTH_TOPIC, Image, queue_size=10, buff_size=2**24)
+        # standard 640×480 RGB image is about 0.9 MB., so buff_size is set to 4 MB to avoid dropping frames (to hold 1-2 images only)
+        self.rgb_sub = message_filters.Subscriber(RGB_TOPIC, Image, queue_size=RGB_SUB_QSIZE, buff_size=2**22)
+        self.depth_sub = message_filters.Subscriber(DEPTH_TOPIC, Image, queue_size=DEPTH_SUB_QSIZE, buff_size=2**22)
         
         # sync RGB and Depth with ApproximateTimeSynchronizer
         self.ts = message_filters.ApproximateTimeSynchronizer(
-            [self.rgb_sub, self.depth_sub], queue_size=10,
-            slop=0.1  # 100ms tolerance
+            [self.rgb_sub, self.depth_sub], queue_size=5,
+            slop=0.05  # 50ms tolerance
         )
         self.ts.registerCallback(self.rgbd_callback)
         
         # Publishers
-        self.detection_pub = rospy.Publisher(DOOR_DETECTION_TOPIC, DoorDetection, queue_size=10)
-        self.pose_pub = rospy.Publisher(DOOR_POSE_TOPIC, DoorPose, queue_size=10)
+        # self.detection_pub = rospy.Publisher(DOOR_DETECTION_TOPIC, DoorDetection, queue_size=10) # NOT NEEDED now
+        self.pose_pub = rospy.Publisher(DOOR_POSE_TOPIC, DoorPoseArray, queue_size=POSE_PUB_QSIZE) # send snapshot of poses per frame
         
         rospy.loginfo("=" * 60)
         rospy.loginfo("Door Detection and Pose Node Initialized")
@@ -91,7 +89,7 @@ class DoorDetectionAndPoseNode:
         rospy.loginfo(f"  Confidence threshold: {CONFIDENCE_THRESHOLD}")
         rospy.loginfo(f"  Publishing detections to: {DOOR_DETECTION_TOPIC}")
         rospy.loginfo(f"  Publishing poses to: {DOOR_POSE_TOPIC}")
-        rospy.loginfo("  RGB-D synchronization: ENABLED (slop=100ms)")
+        rospy.loginfo("  RGB-D synchronization: ENABLED (slop=50ms)")
         rospy.loginfo("=" * 60)
     
     def rgbd_callback(self, rgb_msg, depth_msg):
@@ -101,13 +99,9 @@ class DoorDetectionAndPoseNode:
         """
         current_time = rospy.Time.now()
         time_since_last = (current_time - self.last_detection_time).to_sec()
-        if time_since_last < (1.0 / DETECTION_RATE):
+        if self.is_processing or time_since_last < (1.0 / DETECTION_RATE):
+            rospy.loginfo("Already processing or below detection rate, skipping frame")
             return  # skip frame
-        
-        # Check if already processing (avoid backlog)
-        if self.is_processing:
-            rospy.logdebug("Already processing, skipping frame")
-            return
         
         try:
             self.is_processing = True
@@ -134,7 +128,7 @@ class DoorDetectionAndPoseNode:
             # YOLO detection on RGB image
             detections = self.door_detector.run_yolo_model(
                 model_path=MODEL_PATH,
-                rgb_image=cv_color_image,
+                rgb_image=self.latest_rgb_frame,
                 img_size=IMG_SIZE,
                 confidence_threshold=CONFIDENCE_THRESHOLD,
                 visualize=False
@@ -150,12 +144,23 @@ class DoorDetectionAndPoseNode:
             # Convert depth to meters for pose estimation
             depth_image_m = self.latest_depth_frame.astype(np.float32) / 1000.0
             
+            door_pose_msgs = []
             for det in detections:
-                # Publish detection
-                self.publish_detection(det, rgb_msg.header.stamp)
+                # Publish detection (NOT NEEDED now, as we are publishing poses directly)
+                # self.publish_detection(det, rgb_msg.header.stamp)
                 
-                # Compute and publish 3D pose
-                self.compute_and_publish_pose(det, self.latest_rgb_frame, depth_image_m, rgb_msg.header.stamp)
+                # Compute 3D pose (do not publish per-door)
+                pose_msg = self.compute_pose_message(det, self.latest_rgb_frame, depth_image_m, rgb_msg.header.stamp)
+                if pose_msg is not None:
+                    door_pose_msgs.append(pose_msg)
+            
+            if len(door_pose_msgs) > 0:
+                pose_array = DoorPoseArray()
+                pose_array.header.stamp = rgb_msg.header.stamp
+                pose_array.header.frame_id = "map" # as all poses are in map frame
+                pose_array.doors = door_pose_msgs
+                self.pose_pub.publish(pose_array)
+                rospy.loginfo(f"Published pose array: {len(door_pose_msgs)} doors")
             
             self.last_detection_time = current_time
             
@@ -184,9 +189,9 @@ class DoorDetectionAndPoseNode:
         except Exception as e:
             rospy.logwarn(f"Failed to publish detection: {e}")
     
-    def compute_and_publish_pose(self, detection, rgb_image, depth_image_m, stamp):
+    def compute_pose_message(self, detection, rgb_image, depth_image_m, stamp):
         """
-        Compute 3D pose from detection and publish.
+        Compute 3D pose from detection and return DoorPose message.
         Uses the SAME rgb_image and depth_image that detection was performed on.
         """
         try:
@@ -198,27 +203,28 @@ class DoorDetectionAndPoseNode:
             door_box_dict = {"bbox": detection['bbox']}
             
             # Compute 3D pose in camera frame, does all plane fitting, RANSAC, normal calculations, internally
-            door_centre_cam, normal_vector_cam = compute_door_3d_pose_from_detection(
+            # door centre (x, y, z) in camera frame, normal vector (x, y, z), door width in meters
+            door_centre_cam, normal_vector_cam, door_width = compute_door_3d_pose_from_detection(
                 rgb_image,
                 depth_image_m, # actual rs depth
                 door_box_dict,
                 self.door_detector,
                 door_type=door_type,
-                visualize_roi=False
+                visualize_roi=False,
+                use_da=False # not used for pose estimationas its relatively slow
             )
             
             if door_centre_cam is None or normal_vector_cam is None:
                 rospy.logwarn(f"Failed to compute 3D pose for {door_type}")
-                return
+                return None
             
             # Transform to map frame
             door_pose_map = self.transform_camera_to_map(door_centre_cam, normal_vector_cam, stamp)
             
             if door_pose_map is None:
                 rospy.logwarn("Transform to map frame failed")
-                return
+                return None
             
-            # Publish pose message
             pose_msg = DoorPose()
             pose_msg.header.stamp = stamp
             pose_msg.header.frame_id = "map"
@@ -228,22 +234,17 @@ class DoorDetectionAndPoseNode:
             pose_msg.normal.x = door_pose_map["normal"][0]
             pose_msg.normal.y = door_pose_map["normal"][1]
             pose_msg.normal.z = door_pose_map["normal"][2]
-            pose_msg.width = door_pose_map.get("width", 0.9)  # default width
+            pose_msg.width = float(door_width)
             pose_msg.door_type = door_type
             pose_msg.confidence = float(detection['conf'])
-            
-            self.pose_pub.publish(pose_msg)
-            
-            rospy.loginfo(
-                f"Published pose: {door_type} at "
-                f"({pose_msg.position.x:.2f}, {pose_msg.position.y:.2f}, {pose_msg.position.z:.2f}), "
-                f"conf={pose_msg.confidence:.2f}"
-            )
-            
+
+            return pose_msg
+
         except Exception as e:
             rospy.logerr(f"Pose computation/publishing failed: {e}")
             import traceback
             traceback.print_exc()
+            return None
     
     def transform_camera_to_map(self, door_centre_cam, door_normal_cam, stamp):
         """Transform door pose from camera frame to map frame"""
@@ -251,7 +252,7 @@ class DoorDetectionAndPoseNode:
             # Lookup transform: camera_link -> map
             tf_cam_to_map = self.tf_buffer.lookup_transform(
                 "map", 
-                "camera_link", 
+                "camera_link", # NOTE: need to create a static transform from camera_link to base_link, and ensure tf tree is correct
                 rospy.Time(0),  # Use latest available
                 rospy.Duration(1.0)
             )
@@ -294,7 +295,7 @@ class DoorDetectionAndPoseNode:
                 return None
             normal_vec = normal_vec / norm
             
-            return {
+            door_pose_map = {
                 "position": [
                     door_point_map.point.x, 
                     door_point_map.point.y, 
@@ -306,6 +307,8 @@ class DoorDetectionAndPoseNode:
                     float(normal_vec[2])
                 ]
             }
+            
+            return door_pose_map
             
         except Exception as e:
             rospy.logwarn(f"TF transform failed: {e}")

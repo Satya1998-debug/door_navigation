@@ -22,7 +22,7 @@ import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
 # Import custom messages
-from door_navigation.msg import DoorPose
+from door_navigation.msg import DoorPoseArray
 from door_navigation.srv import EstimateDoorState
 
 # Path setup
@@ -65,7 +65,7 @@ class DoorCoordinator:
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         
         # subscribe to door poses (from door_pose_estimator_node)
-        rospy.Subscriber(DOOR_POSE_TOPIC, DoorPose, self.door_pose_callback, queue_size=10)
+        rospy.Subscriber(DOOR_POSE_TOPIC, DoorPoseArray, self.door_pose_callback, queue_size=10)
         
         # subscribe to global plan
         rospy.Subscriber(TEB_GLOBAL_PLAN_TOPIC, Path, self.plan_callback, queue_size=1)
@@ -92,20 +92,23 @@ class DoorCoordinator:
         rospy.loginfo("DoorCoordinator initialized")
     
     def door_pose_callback(self, msg):
-        """Cache latest door poses"""
-        # Convert to dict for compatibility with existing code
-        door_pose = {
-            "position": [msg.position.x, msg.position.y, msg.position.z],
-            "normal": [msg.normal.x, msg.normal.y, msg.normal.z],
-            "width": msg.width,
-            "door_type": msg.door_type,
-            "confidence": msg.confidence,
-            "timestamp": msg.header.stamp
-        }
-        
-        # only last 2 secs are kept
-        self.latest_door_poses = [p for p in self.latest_door_poses if (rospy.Time.now() - p["timestamp"]).to_sec() < 2.0]
-        self.latest_door_poses.append(door_pose)
+        """Cache latest door poses snapshot"""
+        if msg is None or len(msg.doors) == 0:
+            return
+
+        snapshot = []
+        for door in msg.doors:
+            snapshot.append({
+                "position": [door.position.x, door.position.y, door.position.z],
+                "normal": [door.normal.x, door.normal.y, door.normal.z],
+                "width": door.width,
+                "door_type": door.door_type,
+                "confidence": door.confidence,
+                "timestamp": msg.header.stamp
+            })
+
+        # Keep only the latest snapshot to represent the world state for this frame
+        self.latest_door_poses = snapshot
     
     def plan_callback(self, msg):
         self.current_plan = msg
@@ -143,7 +146,7 @@ class DoorCoordinator:
         
         for door_pose in self.latest_door_poses:
             if self.check_door_intersects_path(door_pose, robot_pose):
-                self.current_door_pose_map = door_pose
+                self.current_door_pose_map = door_pose  # can handle only 1 door for traversal at a time
                 return True
         
         return False
