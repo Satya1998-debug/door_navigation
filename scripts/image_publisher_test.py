@@ -16,8 +16,8 @@ def publish_synced_frames():
     rate = rospy.Rate(2) # 10 Hz
 
     # Load images once to save CPU
-    rgb_path = "/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_19.jpg"
-    depth_path = "/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_depth_lab_19.png"
+    rgb_path = "/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_35.jpg"
+    depth_path = "/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_depth_lab_35.png"
 
     cv_rgb = cv2.imread(rgb_path, cv2.IMREAD_COLOR)
     cv_depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED) # Keep 16-bit
