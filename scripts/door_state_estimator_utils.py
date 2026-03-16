@@ -1,18 +1,31 @@
 
 import ctypes
+import sys
+import os
 # Fix for PyTorch libgomp TLS allocation issue - preload libgomp before torch imports
 try:
     ctypes.CDLL("libgomp.so.1", mode=ctypes.RTLD_GLOBAL)
 except OSError:
     pass  # libgomp already loaded or not found
 
+
+
 import base64
 import time
 from ollama import chat
 import cv2
 import numpy as np
+
+# Path setup
+import rospkg
+rospack = rospkg.RosPack()
+PACKAGE_PATH = rospack.get_path('door_navigation')
+script_dir = os.path.join(PACKAGE_PATH, 'scripts')
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
 from door_ros_interfaces import DoorDetector
-from door_navigation.scripts.door_pose_estimator_utils import fit_plane, project_to_3d, visualize_plane_with_normal
+from door_pose_estimator_utils import fit_plane, project_to_3d, visualize_plane_with_normal
 from utils.visualization import visualize_door_passability, visualize_roi
 from utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
 
@@ -256,6 +269,9 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         s_time = time.time()
         points_3d_door = project_to_3d(x1, y1, valid_mask=None, depth=roi_depth)
         door_inliers, door_n, _ = fit_plane(points_3d_door, "singledoor_roi_plane-door")
+        if door_n is None or door_inliers is None:
+            print("Door plane fit failed")
+            return None
 
         # visualize door plane with normal
         if visualize:
@@ -265,6 +281,9 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         x1_o, y1_o, _, _ = outer_bbox
         points_3d_wall = project_to_3d(x1_o, y1_o, valid_mask=exp_mask, depth=full_depth)
         wall_inliers, wall_n, _ = fit_plane(points_3d_wall, "singledoor_roi_plane-wall")
+        if wall_n is None or wall_inliers is None:
+            print("Wall plane fit failed")
+            return None
         
         # visualize wall plane with normal
         if visualize:
@@ -329,12 +348,18 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         s_time = time.time()
         points_3d_door_left = project_to_3d(left_bbox[0], left_bbox[1], valid_mask=None, depth=roi_depth)
         door_l_inliners, door_l_n, _ = fit_plane(points_3d_door_left)
+        if door_l_n is None or door_l_inliners is None:
+            print("Left door plane fit failed")
+            return None
         if visualize:
             visualize_plane_with_normal(door_l_inliners, normal_vector=door_l_n)
 
         # fit plane for right door
         points_3d_door_right = project_to_3d(right_bbox[0], right_bbox[1], valid_mask=None, depth=roi_depth)
         door_r_inliners, door_r_n, _ = fit_plane(points_3d_door_right)
+        if door_r_n is None or door_r_inliners is None:
+            print("Right door plane fit failed")
+            return None
         if visualize:
             visualize_plane_with_normal(door_r_inliners, normal_vector=door_r_n)
         

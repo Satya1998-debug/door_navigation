@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Offline test launch: publish RGB-D images and run door pipeline -->
+
+    <!-- Image files -->
+    <arg name="rgb_image" default="/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_19.jpg"/>
+    <arg name="depth_image" default="/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_depth_lab_19.png"/>
+    <arg name="publish_rate" default="2.0"/>
+
+    <!-- Topics from config.py -->
+    <arg name="rgb_topic" default="/camera/color/image_raw"/>
+    <arg name="depth_topic" default="/camera/aligned_depth_to_color/image_raw"/>
+
+    <!-- Fake TF for offline testing -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_camera_link"
+          args="0 0 0 0 0 0 map camera_link" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_base_link"
+          args="0 0 0 0 0 0 map base_link" />
+
+    <!-- RGB image publisher -->
+    <!-- <node pkg="image_publisher" type="image_publisher" name="rgb_image_publisher" 
+          args="$(arg rgb_image) image_raw:=/camera/color/image_raw" output="screen">
+        <param name="filename" value="$(arg rgb_image)"/>
+        <param name="publish_rate" value="$(arg publish_rate)"/>
+        <remap from="image_raw" to="/camera/color/image_raw"/>
+    </node> -->
+
+    <!-- Depth image publisher -->
+    <!-- <node pkg="image_publisher" type="image_publisher" name="depth_image_publisher" 
+          args="$(arg depth_image) image_raw:=/camera/aligned_depth_to_color/image_raw" output="screen">
+        <param name="filename" value="$(arg depth_image)"/>
+        <param name="publish_rate" value="$(arg publish_rate)"/>
+        <remap from="image_raw" to="/camera/aligned_depth_to_color/image_raw"/>
+    </node> -->
+
+    <!-- <node pkg="image_publisher" type="publish_depth.py" name="depth_image_publisher" output="screen">
+        <param name="image_path" value="$(arg depth_image)"/>
+    </node> -->
+
+    <!-- Door pipeline nodes -->
+    <!-- <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/> -->
+    <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
+    <!-- <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/> -->
+
+</launch>

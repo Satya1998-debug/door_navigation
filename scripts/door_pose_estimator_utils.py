@@ -18,6 +18,7 @@ script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
+import rospy
 from utils.config import LABEL_MAP
 from utils.utils import project_to_3d, expand_bbox, ring_mask, divide_bbox
 from utils.visualization import visualize_plane_with_normal, visualize_roi
@@ -273,21 +274,27 @@ def compute_door_width(inliers, normal_vector):
         return None
 
 def get_final_depth(depth_rs, depth_da):
-    # RS depth is best for non-glass, so fill RS depth with DA depth where invalid RS depth (e.g., glass regions)
-    # This excludes the "glass holes" (0) and the far background
-    mask_reliable = (depth_rs > 0.6) & (depth_rs < 6.0) # valid range for camera D455
-
-    if np.any(mask_reliable):
-        # the scale difference between calibrated AI and the real sensor
-        # We use median to ignore outliers/noise
-        alignment_scale = np.median(depth_rs[mask_reliable]) / np.median(depth_da[mask_reliable])
-            
-        # Apply this frame-specific scale to the DA depth
-        depth_da_final = depth_da * alignment_scale
+    mask_reliable = (depth_rs > 0.6) & (depth_rs < 6.0)
+    
+    if np.sum(mask_reliable) > 100: # Ensure enough points for a fit
+        # 1. Robustly estimate Scale and Shift using RANSAC or Least Squares
+        # This handles the affine nature of Depth Anything
+        x = depth_da[mask_reliable]
+        y = depth_rs[mask_reliable]
+        
+        scale = (np.mean(x * y) - np.mean(x) * np.mean(y)) / (np.var(x) + 1e-6)
+        shift = np.mean(y) - scale * np.mean(x)
+        
+        depth_da_aligned = (depth_da * scale) + shift
+        
+        # 2. Use RS where valid, DA where RS is 0 (holes/glass)
+        final_depth = np.where(depth_rs > 0, depth_rs, depth_da_aligned)
+        rospy.loginfo("Merging RS and DA depths to get Final Depth")
     else:
-        # Fallback if the robot is looking at only glass
-        depth_da_final = depth_da
-    return depth_da_final
+        rospy.loginfo("Fallback to depth DA as Final Depth")
+        final_depth = depth_da # Total fallback
+        
+    return final_depth # Clip to max sensor range
 
 def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, door_detector, 
                                         door_type='door_single', visualize=True, use_da=False):

@@ -23,8 +23,8 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 from door_navigation.srv import EstimateDoorState, EstimateDoorStateResponse
-from door_navigation.scripts.door_state_estimator_utils import estimate_single_door_state, estimate_double_door_state
-from door_navigation.scripts.door_pose_estimator_utils import get_final_depth
+from door_state_estimator_utils import estimate_single_door_state, estimate_double_door_state
+from door_pose_estimator_utils import get_final_depth
 from door_ros_interfaces import DoorDetector
 from utils.utils import crop_to_bbox_depth
 from utils.config import (
@@ -42,16 +42,22 @@ DEPTH_SUB_QSIZE = 1
 
 WAIT_BEFORE_ESTIMATE = 2.0 # secs waited after reaching pre-goal and before running state estimation
 
+LOCAL_TEST = True
+
 class DoorStateEstimatorService:
     def __init__(self):
         rospy.init_node("door_state_estimator_service")
         
         # Parameters
-        self.rgb_topic = RGB_TOPIC
-        self.depth_topic = DEPTH_TOPIC
-        self.use_vlm = True
-        self.use_da = True
-        self.visualize = False
+        if LOCAL_TEST:
+            self.rgb_topic = RGB_TOPIC
+            self.depth_topic = DEPTH_TOPIC
+        else:
+            self.rgb_topic = RGB_TOPIC
+            self.depth_topic = DEPTH_TOPIC
+        self.use_vlm = False # True in Jetson
+        self.use_da = False
+        self.visualize = True
         self.wait_before_estimate = WAIT_BEFORE_ESTIMATE
         
         # CV Bridge
@@ -94,10 +100,10 @@ class DoorStateEstimatorService:
         """Cache latest synchronized RGB-D frames"""
         try:
             cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
-            cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
+            cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='16UC1')
 
-            if cv_depth_image.dtype == np.float32 or cv_depth_image.dtype == np.float64:
-                cv_depth_image = (cv_depth_image * 1000).astype(np.uint16)
+            # if cv_depth_image.dtype == np.float16: # in mm # TODO: verify with actual RGBD data from camera
+            cv_depth_image = cv_depth_image.astype(np.float32) / 1000.0 # convert to meters
 
             with self.frame_lock:
                 self.latest_rgb_frame = cv_color_image
@@ -114,6 +120,7 @@ class DoorStateEstimatorService:
             rospy.loginfo("Door state estimation service called")
             
             if self.wait_before_estimate > 0.0:
+                rospy.loginfo(f"Waiting {self.wait_before_estimate} seconds before estimating door state...")
                 rospy.sleep(self.wait_before_estimate)
             
             with self.frame_lock: # lock the frame during transfer/copy latest frame to local variable for processing
@@ -125,15 +132,14 @@ class DoorStateEstimatorService:
             if rgb_img is None or depth_img is None:
                 response.door_state = "unknown"
                 response.is_passable = False
-                response.confidence = 0.0
                 response.error_message = "No synchronized RGB-D images available"
                 response.success = False
                 rospy.logwarn(response.error_message)
                 return response
-            
-            # Convert depth to float32 meters if needed
-            if depth_img.dtype == np.uint16:
-                depth_img = depth_img.astype(np.float32) / 1000.0  # mm to meters
+
+            # Ensure depth is 2D for downstream processing
+            if len(depth_img.shape) == 3:
+                depth_img = depth_img[:, :, 0]
 
             result = self.estimate_door_state_from_rgbd(rgb_img, depth_img)
             
@@ -165,48 +171,9 @@ class DoorStateEstimatorService:
             rospy.logerr(f"Error in door state estimation service: {e}")
             response.door_state = "error"
             response.is_passable = False
-            response.confidence = 0.0
             response.error_message = str(e)
             return response
     
-    def estimate_bbox_from_pose(self, door_pose_msg, img_shape):
-        """
-        Estimate a reasonable bbox from door pose.
-        This is a fallback - ideally, the coordinator should cache the detection bbox.
-        """
-        try:
-            # Camera intrinsics (should match door_pose_estimator)
-            FX = 385.88861083984375
-            FY = 385.3906555175781
-            CX = 317.80999755859375
-            CY = 243.65032958984375
-            
-            # Door center in camera frame (need to transform from map frame)
-            # For simplicity, assume door is in front and project center + width
-            # This is a rough estimate - better to cache the original detection bbox
-            
-            # Use a fixed bbox size based on typical door dimensions
-            # This is a workaround - proper implementation should track the bbox
-            img_h, img_w = img_shape[:2]
-            
-            # Estimate bbox as center 1/3 of image with standard door proportions
-            w = img_w // 3
-            h = int(img_h * 0.6)  # Doors are typically tall
-            x1 = (img_w - w) // 2
-            y1 = (img_h - h) // 2
-            x2 = x1 + w
-            y2 = y1 + h
-            
-            bbox = [float(x1), float(y1), float(x2), float(y2)]
-            rospy.logwarn(f"Using estimated bbox (not from detection): {bbox}")
-            rospy.logwarn("For better accuracy, pass the original detection bbox")
-            
-            return bbox
-            
-        except Exception as e:
-            rospy.logerr(f"Error estimating bbox: {e}")
-            return None
-        
     def estimate_door_state_from_rgbd(self, rgb_img, depth_img_rs):
         """
         Run YOLO on current RGB frame, choose best door, then estimate door state.
@@ -218,7 +185,7 @@ class DoorStateEstimatorService:
                 rgb_image=rgb_img,
                 img_size=IMG_SIZE,
                 confidence_threshold=CONFIDENCE_THRESHOLD,
-                visualize=False
+                visualize=self.visualize
             )
 
             if len(detections) == 0:
@@ -227,7 +194,7 @@ class DoorStateEstimatorService:
 
             best_det = max(detections, key=lambda d: d.get("conf", 0.0))
             door_bbox = best_det.get("bbox")
-            if not door_bbox:
+            if door_bbox is None:
                 rospy.logwarn("Detection missing bbox, cannot estimate door state")
                 return None
 
@@ -236,18 +203,21 @@ class DoorStateEstimatorService:
             
             # process depth image
             if self.use_da:
+                rospy.loginfo("Running DepthAnything v2 for depth estimation...")
                 # get RAW depth from DepthAnything model (in meters)
                 depth_da = self.door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_img)
                 # apply correction to depth_da_raw using pre-computed calibration coefficients
                 depth_da_corr = self.door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
                 # get final depth image (corrected + scaled)
-                depth_da_final = get_final_depth(depth_img_rs, depth_da_corr)  # TODO need to check
+                depth_final = get_final_depth(depth_img_rs, depth_da_corr)  # TODO need to check
             else: # while navigation, we can directly use the RS depth as it's more real-time and accurate for non-glass regions, and the robot will be close enough to the door for better depth readings
-                depth_da_final = depth_img_rs
+                rospy.loginfo("Using raw depth image from RealSense for depth estimation...")
+                depth_final = depth_img_rs
                 
             # crop ROI for depth, based on actual bbox
-            roi_depth = crop_to_bbox_depth(depth_da_final, door_bbox)
-            full_depth = depth_da_final
+            roi_depth = crop_to_bbox_depth(depth_final, door_bbox)
+            rospy.loginfo("Cropped depth image to door bbox for state estimation")
+            full_depth = depth_final
 
             if door_type == "door_double":
                 rospy.loginfo("Estimating double door state (re-detect)")
@@ -269,7 +239,7 @@ class DoorStateEstimatorService:
             return door_state_res
 
         except Exception as e:
-            rospy.logerr(f"Door state estimation failed: {e}")
+            rospy.logerr(f"Error in estimate_door_state_from_rgbd: {e}")
             return None
     
     def spin(self):

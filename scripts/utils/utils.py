@@ -3,8 +3,25 @@ import cv2
 from utils.config import CX, FX, CY, FY
 
 def crop_to_bbox_depth(img, door_box):
+    if img is None:
+        return None
+
+    # Depth images should be 2D. If a 3D array sneaks in, use the first channel.
+    if len(img.shape) == 3:
+        img = img[:, :, 0]
+
     h, w = img.shape
-    x_min, y_min, x_max, y_max = door_box["bbox"]
+
+    # Accept both dicts with "bbox" and raw bbox lists/tuples.
+    if isinstance(door_box, dict):
+        bbox = door_box.get("bbox")
+    else:
+        bbox = door_box
+
+    if bbox is None or len(bbox) < 4:
+        return None
+
+    x_min, y_min, x_max, y_max = bbox
 
     # croping safely within image bounds
     x_min = max(0, float(x_min))
@@ -96,6 +113,13 @@ def ring_mask(img_width, img_height, inner_bbox, outer_bbox, visualize_mask=Fals
 def project_to_3d(x1, y1, valid_mask=None, depth=None, FX=FX, FY=FY, CX=CX, CY=CY):
     # x1, y1: top-left corner of ROI in full image coordinates
     try:
+        if depth is None:
+            return np.array([])
+
+        # Ensure depth is 2D
+        if len(depth.shape) == 3:
+            depth = depth[:, :, 0]
+
         if valid_mask is None:
             # get valid depth points
             valid_mask = np.isfinite(depth) & (depth > 0)
