@@ -45,7 +45,8 @@ from door_ros_interfaces import DoorDetector
 from utils.config import (
     DOOR_DETECTION_TOPIC,
     DOOR_POSE_TOPIC, 
-    LABEL_MAP, 
+    LABEL_DOORS, 
+    LABEL_DOORS,
     MODEL_PATH, 
     CONFIDENCE_THRESHOLD, 
     DETECTION_RATE,
@@ -168,7 +169,7 @@ class DoorDetectionAndPoseNode:
                 # self.publish_detection(det, rgb_msg.header.stamp)
                 
                 # Compute 3D pose (do not publish per-door)
-                if det.get('cls_id') in LABEL_MAP:
+                if det.get('cls_id') in LABEL_DOORS:
                     pose_msg = self.compute_pose_message(det, self.latest_rgb_frame, cv_depth_image, rgb_msg.header.stamp)
                     if pose_msg is not None:
                         door_pose_msgs.append(pose_msg)

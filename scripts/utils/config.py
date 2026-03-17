@@ -29,7 +29,8 @@ DOOR_TRIGGER_DISTANCE = 2.0  # start door logic when closer than this
 LOOKAHEAD_POINTS = 80  # tune based on plan density
 
 # detector parameters
-LABEL_MAP = {0: 'door_double', 1: 'door_single'}
+LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}  # class id to name mapping
+LABEL_DOORS = [0, 1]  # class ids for doors
 MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.pt')  # path to door detection model # last_yolo8m.pt
 DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.json')  # path to save detection results
 CONFIDENCE_THRESHOLD = 0.8

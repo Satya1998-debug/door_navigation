@@ -28,6 +28,7 @@ from door_pose_estimator_utils import get_final_depth
 from door_ros_interfaces import DoorDetector
 from utils.utils import crop_to_bbox_depth
 from utils.config import (
+    LABEL_DOORS,
     LABEL_MAP, 
     MODEL_PATH, 
     CONFIDENCE_THRESHOLD, 
@@ -188,6 +189,9 @@ class DoorStateEstimatorService:
                 confidence_threshold=CONFIDENCE_THRESHOLD,
                 visualize=self.visualize
             )
+            
+            # filter detections for doors only
+            detections = [det for det in detections if det.get('cls_id') in LABEL_DOORS]
 
             if len(detections) == 0:
                 rospy.logwarn("No doors detected for state estimation")
