@@ -38,8 +38,8 @@
     </node> -->
 
     <!-- Door pipeline nodes -->
-    <!-- <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/> -->
-    <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
+    <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/>
+    <!-- <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/> -->
     <!-- <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/> -->
 
 </launch>

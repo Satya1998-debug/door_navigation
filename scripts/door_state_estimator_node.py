@@ -100,9 +100,10 @@ class DoorStateEstimatorService:
         """Cache latest synchronized RGB-D frames"""
         try:
             cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
-            cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='16UC1')
+            cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='16UC1')  # might need to change to pass through actual depth format from camera, but for testing we assume 16UC1 in mm
 
-            # if cv_depth_image.dtype == np.float16: # in mm # TODO: verify with actual RGBD data from camera
+            # if cv_depth_image.dtype == np.float16: # in mm # TODO: verify with actual RGBD data from camera,
+            #  NOTE: commented for testing, need to uncomnnet or test with actual camera
             cv_depth_image = cv_depth_image.astype(np.float32) / 1000.0 # convert to meters
 
             with self.frame_lock:
@@ -209,7 +210,8 @@ class DoorStateEstimatorService:
                 # apply correction to depth_da_raw using pre-computed calibration coefficients
                 depth_da_corr = self.door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
                 # get final depth image (corrected + scaled)
-                depth_final = get_final_depth(depth_img_rs, depth_da_corr)  # TODO need to check
+                # depth_final = get_final_depth(depth_img_rs, depth_da_corr)  # TODO need to check
+                depth_final = depth_da_corr # DA corrected depth is  better
             else: # while navigation, we can directly use the RS depth as it's more real-time and accurate for non-glass regions, and the robot will be close enough to the door for better depth readings
                 rospy.loginfo("Using raw depth image from RealSense for depth estimation...")
                 depth_final = depth_img_rs

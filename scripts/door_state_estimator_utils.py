@@ -263,7 +263,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         print(f"Ring mask shape: {exp_mask.shape}")
 
         if visualize: # visualize ROI
-            visualize_roi(rgb_rs, door_bbox, roi_depth)
+            visualize_roi(rgb_rs, door_bbox, roi_depth, disp_text="single-door")
         
         # fit plane for door
         s_time = time.time()
@@ -275,7 +275,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
 
         # visualize door plane with normal
         if visualize:
-            visualize_plane_with_normal(door_inliers, normal_vector=door_n)
+            visualize_plane_with_normal(door_inliers, normal_vector=door_n, disp_text="single-door")
 
         # fit wall plane
         x1_o, y1_o, _, _ = outer_bbox
@@ -287,7 +287,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         
         # visualize wall plane with normal
         if visualize:
-            visualize_plane_with_normal(wall_inliers, normal_vector=wall_n)
+            visualize_plane_with_normal(wall_inliers, normal_vector=wall_n, disp_text="single-door-wall-plane")
 
         # calculate door opening angle
         door_opening_angle = calculate_door_opening_angle(door_n, wall_n)
@@ -342,7 +342,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         print(f"Left door bbox: {left_bbox}, Right door bbox: {right_bbox}")
         
         if visualize: # visualize ROI
-            visualize_roi(rgb_rs, door_bbox, roi_depth)
+            visualize_roi(rgb_rs, door_bbox, roi_depth, disp_text="double-door")
 
         # fit plane for left door
         s_time = time.time()
@@ -352,7 +352,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
             print("Left door plane fit failed")
             return None
         if visualize:
-            visualize_plane_with_normal(door_l_inliners, normal_vector=door_l_n)
+            visualize_plane_with_normal(door_l_inliners, normal_vector=door_l_n, disp_text="double-left-door")
 
         # fit plane for right door
         points_3d_door_right = project_to_3d(right_bbox[0], right_bbox[1], valid_mask=None, depth=roi_depth)
@@ -361,7 +361,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
             print("Right door plane fit failed")
             return None
         if visualize:
-            visualize_plane_with_normal(door_r_inliners, normal_vector=door_r_n)
+            visualize_plane_with_normal(door_r_inliners, normal_vector=door_r_n, disp_text="double-right-door")
         
         # calculate angle between two door normals
         side_doors_angle = calculate_door_opening_angle(door_l_n, door_r_n)

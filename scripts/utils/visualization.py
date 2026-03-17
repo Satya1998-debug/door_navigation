@@ -4,7 +4,7 @@ from utils.utils import crop_to_bbox_rgb
 import open3d as o3d
 from utils.config import CX, FX
 
-def visualize_roi(rgb_rs, door_bbox, roi_depth):
+def visualize_roi(rgb_rs, door_bbox, roi_depth, disp_text=""):
     try:
         roi_rgb = crop_to_bbox_rgb(rgb_rs, door_bbox) # crop RGB for visualization
         roi_depth_clean = np.nan_to_num(roi_depth, nan=0.0) # replace nan with 0 for visualization
@@ -16,18 +16,17 @@ def visualize_roi(rgb_rs, door_bbox, roi_depth):
         else:
             depth_viz_color = np.zeros_like(roi_rgb)
             
-        cv2.imshow("ROI RGB", roi_rgb)
-        cv2.imshow("ROI Depth", depth_viz_color)
+        cv2.imshow(f"{disp_text}-ROI RGB", roi_rgb)
+        cv2.imshow(f"{disp_text}-ROI Depth", depth_viz_color)
         # visualize ring mask on original image
-        mask_viz = rgb_rs.copy()
-        cv2.imshow("Wall Region on Image", mask_viz)
+        cv2.imshow(f"{disp_text}-Full-RGB", rgb_rs)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
     except Exception as e:
         print(f"Error in visualize_roi: {e}")
         return 
     
-def visualize_plane_with_normal(inlier_points, normal_vector):
+def visualize_plane_with_normal(inlier_points, normal_vector, disp_text=""):
     try:
         inlier_centre = np.median(inlier_points, axis=0).astype(np.float32)  # inlier/door/wall center point
         print(f"Door/Inlier center: X={inlier_centre[0]:.3f}m, Y={inlier_centre[1]:.3f}m, Z={inlier_centre[2]:.3f}m")
@@ -133,7 +132,7 @@ def visualize_plane_with_normal(inlier_points, normal_vector):
         o3d.visualization.draw_geometries(
             [pcd, plane_mesh, arrow, camera_arrow, camera_to_door_line, 
              coord_frame_camera, coord_frame_door],
-            window_name="Door Plane & Normal Visualization",
+            window_name="Door Plane & Normal: " + disp_text,
             width=1280, height=720,
             point_show_normal=False
         )

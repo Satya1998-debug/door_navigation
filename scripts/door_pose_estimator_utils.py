@@ -187,14 +187,14 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
         roi_depth_l = full_depth[int(l_y1):int(l_y2), int(l_x1):int(l_x2)]
 
         if visualize: # visualize ROI
-            visualize_roi(rgb_image, left_bbox, roi_depth_l)
+            visualize_roi(rgb_image, left_bbox, roi_depth_l, disp_text="double-left-door")
 
         points_3d_l = project_to_3d(int(l_x1), int(l_y1), depth=roi_depth_l)
         l_inliers, l_door_n, _ = fit_plane(points_3d_l, "")
 
         if visualize:
             if l_door_n is not None:
-                visualize_plane_with_normal(l_inliers, l_door_n)
+                visualize_plane_with_normal(l_inliers, l_door_n, disp_text="double-left-door")
             
         # Fit plane for right door leaf
         r_x1, r_y1, r_x2, r_y2 = right_bbox
@@ -204,14 +204,14 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
         roi_depth_r = full_depth[int(r_y1):int(r_y2), int(r_x1):int(r_x2)]
 
         if visualize: # visualize ROI
-            visualize_roi(rgb_image, right_bbox, roi_depth_r)
+            visualize_roi(rgb_image, right_bbox, roi_depth_r, disp_text="double-right-door")
 
         points_3d_r = project_to_3d(int(r_x1), int(r_y1), depth=roi_depth_r)
         r_inliers, r_door_n, _ = fit_plane(points_3d_r, "")
         
         if visualize:
             if r_door_n is not None:
-                visualize_plane_with_normal(r_inliers, r_door_n)
+                visualize_plane_with_normal(r_inliers, r_door_n, disp_text="double-right-door")
             
         # Compute angle bisector if both planes fit successfully
         if l_door_n is not None and r_door_n is not None:
@@ -229,7 +229,7 @@ def get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, full_depth, visuali
             door_width = compute_door_width(combined_inliers, normal_vector)
             
             if visualize:
-                visualize_plane_with_normal(combined_inliers, normal_vector)
+                visualize_plane_with_normal(combined_inliers, normal_vector, disp_text="double-door-bisector")
                 
             # Apply forward direction constraint for safety
             return normal_vector, door_centre, door_width
@@ -305,9 +305,10 @@ def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, doo
             # apply correction to depth_da_raw using pre-computed calibration coefficients
             depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
             # get final depth image (corrected + scaled)
-            depth_da_final = get_final_depth(depth_image_rs, depth_da_corr)  # TODO need to check
+            # depth_da_final = get_final_depth(depth_image_rs, depth_da_corr)  # TODO need to check
+            depth_final = depth_da_corr
         else: # while navigation, we can directly use the RS depth as it's more real-time and accurate for non-glass regions, and the robot will be close enough to the door for better depth readings
-            depth_da_final = depth_image_rs
+            depth_final = depth_image_rs
         # actual bbox coordinates from detection
         bbox = door_box["bbox"]
         x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
@@ -315,9 +316,9 @@ def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, doo
         # for single doors, use wall normal instead of door normal for safer navigation
         # This prevents robot from going into walls when door is partly open
         if door_type == 'door_single':
-            normal_vector, door_centre, door_width = get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, depth_da_final, visualize=visualize)
+            normal_vector, door_centre, door_width = get_normal_vector_single_door(x1, y1, x2, y2, rgb_image, depth_final, visualize=visualize)
         else: # for double doors, use angle bisector of left and right door normals
-            normal_vector, door_centre, door_width = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_da_final, visualize=visualize)
+            normal_vector, door_centre, door_width = get_normal_vector_double_door(x1, y1, x2, y2, rgb_image, depth_final, visualize=visualize)
         
         return door_centre, normal_vector, door_width # door centre (x, y, z) in camera frame, normal vector (x, y, z), door width in meters
 
@@ -339,6 +340,8 @@ def test_pose_estimator(img_path, visualize=True):
     print(f"DAv2 inference time: {time.time() - s_time:.3f} seconds")
     # apply correction to depth_da_raw using pre-computed calibration coefficients
     depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
+    
+    depth_final = depth_da_corr
 
     # get bounding box, make detection object
     detections = door_detector.run_yolo_model(rgb_image=rgb_rs, visualize=visualize) # runs YOLO model and returns detections
@@ -356,7 +359,7 @@ def test_pose_estimator(img_path, visualize=True):
 
     s_time = time.time()
     compute_door_3d_pose_from_detection(rgb_image=rgb_rs, 
-                                        depth_image=depth_da_final, 
+                                        depth_image=depth_final, 
                                         door_box=door_box,
                                         door_detector=door_detector,
                                         door_type=door_type,

@@ -16,6 +16,12 @@ Benefits:
 - More efficient (single image processing pipeline)
 """
 
+import os
+import os
+import sys
+
+import sys
+
 import rospy
 import tf2_ros
 import tf2_geometry_msgs
@@ -25,9 +31,16 @@ from door_navigation.msg import DoorDetection, DoorPose, DoorPoseArray
 from cv_bridge import CvBridge
 import numpy as np
 import message_filters
-import threading
 
-from door_navigation.scripts.door_pose_estimator_utils import compute_door_3d_pose_from_detection
+# Path setup
+import rospkg
+rospack = rospkg.RosPack()
+PACKAGE_PATH = rospack.get_path('door_navigation')
+script_dir = os.path.join(PACKAGE_PATH, 'scripts')
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+    
+from door_pose_estimator_utils import compute_door_3d_pose_from_detection
 from door_ros_interfaces import DoorDetector
 from utils.config import (
     DOOR_DETECTION_TOPIC,
@@ -44,11 +57,15 @@ from utils.config import (
 POSE_PUB_QSIZE = 1
 RGB_SUB_QSIZE = 1
 DEPTH_SUB_QSIZE = 1
+MAX_POSE_RADIUS_M = 3.0  # max distance to consider for pose estimation (to filter out far away false positives)
 
 class DoorDetectionAndPoseNode:
     """Combined node for door detection and 3D pose estimation"""
     
     def __init__(self):
+        self.visualize = True
+        self.use_da = True
+        self.max_pose_radius_m = MAX_POSE_RADIUS_M
         rospy.init_node("door_detection_and_pose_node")
         
         # Door detector (YOLO + depth processing)
@@ -108,11 +125,11 @@ class DoorDetectionAndPoseNode:
             
             # convert ROS Image messages to OpenCV images
             cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
-            cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
+            cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='16UC1') # might need to change to pass through actual depth format from camera, but for testing we assume 16UC1 in mm
 
             # always save depth in 'mm' as uint16, as it is standard for depth images
-            if cv_depth_image.dtype == np.float32 or cv_depth_image.dtype == np.float64:
-                cv_depth_image = (cv_depth_image * 1000).astype(np.uint16) # convert to mm and uint16
+            # if cv_depth_image.dtype == np.float32 or cv_depth_image.dtype == np.float64:
+            cv_depth_image = cv_depth_image.astype(np.float32) / 1000.0 # convert to meters (always need to be in meters)
             
             # Verify synchronization
             time_diff = abs((rgb_msg.header.stamp - depth_msg.header.stamp).to_sec())
@@ -131,7 +148,7 @@ class DoorDetectionAndPoseNode:
                 rgb_image=self.latest_rgb_frame,
                 img_size=IMG_SIZE,
                 confidence_threshold=CONFIDENCE_THRESHOLD,
-                visualize=False
+                visualize=True
             )
             
             if len(detections) == 0:
@@ -142,7 +159,8 @@ class DoorDetectionAndPoseNode:
             rospy.loginfo(f"Detected {len(detections)} door(s)")
             
             # Convert depth to meters for pose estimation
-            depth_image_m = self.latest_depth_frame.astype(np.float32) / 1000.0
+            # depth_image_m = self.latest_depth_frame.astype(np.float32) / 1000.0
+            
             
             door_pose_msgs = []
             for det in detections:
@@ -150,10 +168,11 @@ class DoorDetectionAndPoseNode:
                 # self.publish_detection(det, rgb_msg.header.stamp)
                 
                 # Compute 3D pose (do not publish per-door)
-                pose_msg = self.compute_pose_message(det, self.latest_rgb_frame, depth_image_m, rgb_msg.header.stamp)
-                if pose_msg is not None:
-                    door_pose_msgs.append(pose_msg)
-            
+                if det.get('cls_id') in LABEL_MAP:
+                    pose_msg = self.compute_pose_message(det, self.latest_rgb_frame, cv_depth_image, rgb_msg.header.stamp)
+                    if pose_msg is not None:
+                        door_pose_msgs.append(pose_msg)
+                
             if len(door_pose_msgs) > 0:
                 pose_array = DoorPoseArray()
                 pose_array.header.stamp = rgb_msg.header.stamp
@@ -210,12 +229,19 @@ class DoorDetectionAndPoseNode:
                 door_box_dict,
                 self.door_detector,
                 door_type=door_type,
-                visualize_roi=False,
-                use_da=False # not used for pose estimationas its relatively slow
+                visualize=self.visualize,
+                use_da=self.use_da # not used for pose estimationas its relatively slow
             )
             
             if door_centre_cam is None or normal_vector_cam is None:
                 rospy.logwarn(f"Failed to compute 3D pose for {door_type}")
+                return None
+
+            distance = (door_centre_cam[0] ** 2 + door_centre_cam[1] ** 2 + door_centre_cam[2] ** 2) ** 0.5
+            if distance > self.max_pose_radius_m:
+                rospy.logdebug(
+                    f"Skipping pose at {distance:.2f}m (> {self.max_pose_radius_m:.2f}m)"
+                )
                 return None
             
             # Transform to map frame
@@ -316,6 +342,12 @@ class DoorDetectionAndPoseNode:
 
 
 if __name__ == "__main__":
+    import debugpy
+
+    # Inside __init__ or at the start of main
+    # debugpy.listen(('localhost', 5678))
+    # rospy.loginfo("IDLE: Waiting for VSCode debugger to attach on port 5678...")
+    # debugpy.wait_for_client()
     try:
         node = DoorDetectionAndPoseNode()
         rospy.loginfo("Node spinning...")
