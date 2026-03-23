@@ -1,0 +1,17 @@
+{
+    "latest_image_color_lab_35": {
+        "image_path": "/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_35.jpg",
+        "boxes": [
+            {
+                "cls_id": 0,
+                "conf": 0.9412859678268433,
+                "bbox": [
+                    97.50482177734375,
+                    11.83306884765625,
+                    469.288330078125,
+                    372.71630859375
+                ]
+            }
+        ]
+    }
+}
