@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/satya/venv38/bin python3
 """
 Combined Door Detection and Pose Estimation Node
 
