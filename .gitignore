@@ -21,4 +21,5 @@ scripts/utils/__pycache__/*
 *.ply
 
 # old code files 
-scripts/old_code
+# scripts/old_code
+scripts/old_code/__pycache__
