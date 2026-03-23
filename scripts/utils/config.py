@@ -36,10 +36,6 @@ DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.jso
 CONFIDENCE_THRESHOLD = 0.8
 DETECTION_RATE = 2.0  # Hz
 IMG_SIZE = 640  # input image size for the model
-YOLO_DETECTION_MODELS = ["yolo_11m", "yolo_v8l", "yolo_v8m", "yolo_v5l"]  # model name for detection
-DEPTH_ESTIMATION_MODELS = ["depth_anything_v2"]  # model name for depth estimation
-MODEL_BBOX = "yolo_v5l"  # choose model for detection
-DEPTH_MODEL = "depth_anything_v2"  # choose model for depth estimation
 DEPTH_ANYTHING_V2_PATH = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_metric_hypersim_vits.pth')  # path to depth anything v2 model
 
 

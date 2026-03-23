@@ -46,7 +46,7 @@ from utils.config import (
     DOOR_DETECTION_TOPIC,
     DOOR_POSE_TOPIC, 
     LABEL_DOORS, 
-    LABEL_DOORS,
+    LABEL_MAP,
     MODEL_PATH, 
     CONFIDENCE_THRESHOLD, 
     DETECTION_RATE,
@@ -239,10 +239,8 @@ class DoorDetectionAndPoseNode:
                 return None
 
             distance = (door_centre_cam[0] ** 2 + door_centre_cam[1] ** 2 + door_centre_cam[2] ** 2) ** 0.5
-            if distance > self.max_pose_radius_m:
-                rospy.logdebug(
-                    f"Skipping pose at {distance:.2f}m (> {self.max_pose_radius_m:.2f}m)"
-                )
+            if distance > self.max_pose_radius_m: # if door is far away then not considered
+                rospy.logdebug(f"Skipping pose at {distance:.2f}m (> {self.max_pose_radius_m:.2f}m)")
                 return None
             
             # Transform to map frame
