@@ -177,3 +177,6 @@ yapf
 zipp
 zope-interface
 zstandard
+vosk
+PyAudio
+pyttsx3

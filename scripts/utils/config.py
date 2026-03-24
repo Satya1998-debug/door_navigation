@@ -71,3 +71,11 @@ CY = 243.65032958984375
 #   do_rectify: False
 # ---
 
+# speech recognition model
+SPEECH_RECOGNITION_MODEL = "vosk-model-small-en-us-0.15" # "vosk-model-small-en-us-0.15" # "vosk-model-en-us-0.22"
+SPEECH_RECOGNITION_MODEL_PATH = "/home/ias/satya/catkin_ws/src/door_navigation/scripts/utils/speech_model/"
+SPEECH_OUTPUT_DIR = "/home/ias/satya/catkin_ws/src/door_navigation/scripts/output/"
+VOSK_ENABLE_LOGS = False
+QUIET_ALSA_WARNINGS = True
+SPEAKER_DEVICE_INDEX = 24
+MIC_DEVICE_INDEX = 25
