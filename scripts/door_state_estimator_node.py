@@ -1,4 +1,4 @@
-#!/home/satya/venv38/bin python3
+#!/home/ias/satya/venv38/bin/python3
 """
 Door State Estimator Service Node
 Provides on-demand door state estimation (open/closed/passable) when called by coordinator.
@@ -6,6 +6,7 @@ Provides on-demand door state estimation (open/closed/passable) when called by c
 
 import os
 import sys
+import time
 import rospy
 import cv2
 import numpy as np
@@ -23,7 +24,7 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 from door_navigation.srv import EstimateDoorState, EstimateDoorStateResponse
-from door_state_estimator_utils import estimate_single_door_state, estimate_double_door_state
+from door_state_estimator_utils import estimate_single_door_state, estimate_double_door_state, warmup_ollama_vlm
 from door_pose_estimator_utils import get_final_depth
 from door_ros_interfaces import DoorDetector
 from utils.utils import crop_to_bbox_depth
@@ -56,9 +57,9 @@ class DoorStateEstimatorService:
         else:
             self.rgb_topic = RGB_TOPIC
             self.depth_topic = DEPTH_TOPIC
-        self.use_vlm = False # True in Jetson
-        self.use_da = False
-        self.visualize = True
+        self.use_vlm = True # True in Jetson
+        self.use_da = True
+        self.visualize = False
         self.wait_before_estimate = WAIT_BEFORE_ESTIMATE
         
         # CV Bridge
@@ -66,6 +67,9 @@ class DoorStateEstimatorService:
 
         # YOLO detector for on-demand re-detection at pre-door
         self.door_detector = DoorDetector()
+        self.door_detector.preload_models(use_da=self.use_da)
+        if self.use_vlm:
+            warmup_ollama_vlm()
 
         # RGB-D sync (similar to DoorDetectionAndPoseNode)
         self.frame_lock = threading.Lock()
@@ -100,6 +104,7 @@ class DoorStateEstimatorService:
     def rgbd_callback(self, rgb_msg, depth_msg):
         """Cache latest synchronized RGB-D frames"""
         try:
+            rospy.loginfo_throttle(5.0, f"RGBD callback sync dt={abs((rgb_msg.header.stamp - depth_msg.header.stamp).to_sec()):.3f}s")
             cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
             cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='16UC1')  # might need to change to pass through actual depth format from camera, but for testing we assume 16UC1 in mm
 
@@ -114,11 +119,12 @@ class DoorStateEstimatorService:
         except Exception as e:
             rospy.logwarn(f"Failed to cache RGB-D frame: {e}")
     
-    def handle_estimate_door_state(self, req): # empty request
+    def handle_estimate_door_state(self, req): # empty request, req={}
         """Service callback for door state estimation"""
         response = EstimateDoorStateResponse()
         
         try:
+            t0 = time.time()
             rospy.loginfo("Door state estimation service called")
             
             if self.wait_before_estimate > 0.0:
@@ -166,7 +172,9 @@ class DoorStateEstimatorService:
             response.conversation = result.get("conversation", "NA")
             response.is_passable = result.get("is_passable", False)
             response.error_message = ""
+            t1 = time.time()
             rospy.loginfo(f"Door state: {door_state}, passable: {response.is_passable}")
+            rospy.loginfo(f"Door State Estimation TOTAL TIME: {t1 - t0:.3f}s")
             return response
             
         except Exception as e:
@@ -182,6 +190,7 @@ class DoorStateEstimatorService:
         Returns a dict with door_state, confidence when successful, or None on failure.
         """
         try:
+            t0 = time.time()
             detections = self.door_detector.run_yolo_model(
                 model_path=MODEL_PATH,
                 rgb_image=rgb_img,
@@ -189,6 +198,8 @@ class DoorStateEstimatorService:
                 confidence_threshold=CONFIDENCE_THRESHOLD,
                 visualize=self.visualize
             )
+            t1 = time.time()
+            rospy.loginfo(f"YOLO inference complete (dt={t1 - t0:.3f}s)")
             
             # filter detections for doors only
             detections = [det for det in detections if det.get('cls_id') in LABEL_DOORS]
@@ -208,6 +219,7 @@ class DoorStateEstimatorService:
             
             # process depth image
             if self.use_da:
+                t2 = time.time()
                 rospy.loginfo("Running DepthAnything v2 for depth estimation...")
                 # get RAW depth from DepthAnything model (in meters)
                 depth_da = self.door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_img)
@@ -216,6 +228,8 @@ class DoorStateEstimatorService:
                 # get final depth image (corrected + scaled)
                 # depth_final = get_final_depth(depth_img_rs, depth_da_corr)  # TODO need to check
                 depth_final = depth_da_corr # DA corrected depth is  better
+                t3 = time.time()
+                rospy.loginfo(f"DepthAnything complete (dt={t3 - t2:.3f}s)")
             else: # while navigation, we can directly use the RS depth as it's more real-time and accurate for non-glass regions, and the robot will be close enough to the door for better depth readings
                 rospy.loginfo("Using raw depth image from RealSense for depth estimation...")
                 depth_final = depth_img_rs
@@ -225,6 +239,7 @@ class DoorStateEstimatorService:
             rospy.loginfo("Cropped depth image to door bbox for state estimation")
             full_depth = depth_final
 
+            t4 = time.time()
             if door_type == "door_double":
                 rospy.loginfo("Estimating double door state (re-detect)")
                 door_state_res = estimate_double_door_state(door_bbox, rgb_img, roi_depth, full_depth, 
@@ -233,12 +248,14 @@ class DoorStateEstimatorService:
                 rospy.loginfo("Estimating single door state (re-detect)")
                 door_state_res = estimate_single_door_state(door_bbox, rgb_img, roi_depth, full_depth, 
                                                         visualize=self.visualize, use_vlm=self.use_vlm)
+            t5 = time.time()
+            rospy.loginfo(f"State estimation complete (dt={t5 - t4:.3f}s)")
                 
             """
             res = {
                 'door_state': 'open',
                 'human_present': 'no',
-                'conversation': 'please open the door',
+                'conversation': 'please open the door', # NA when VLM is not used
                 'is_passable': True,
                 }
             """

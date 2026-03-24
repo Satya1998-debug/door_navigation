@@ -296,19 +296,25 @@ def get_final_depth(depth_rs, depth_da):
         
     return final_depth # Clip to max sensor range
 
-def compute_door_3d_pose_from_detection(rgb_image, depth_image_rs, door_box, door_detector, 
+def compute_da_depth(use_da, door_detector, rgb_image, depth_image_rs):
+    if use_da:
+        t0 = time.time()
+        # get RAW depth from DepthAnything model (in meters)
+        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_image)
+        # apply correction to depth_da_raw using pre-computed calibration coefficients
+        depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
+        # get final depth image (corrected + scaled)
+        # depth_da_final = get_final_depth(depth_image_rs, depth_da_corr)  # TODO need to check
+        depth_final = depth_da_corr
+        rospy.loginfo(f"DepthAnything per-frame complete (dt={time.time() - t0:.3f}s)")
+    else: # while navigation, we can directly use the RS depth as it's more real-time and accurate for non-glass regions, and the robot will be close enough to the door for better depth readings
+        depth_final = depth_image_rs
+    return depth_final
+    
+
+def compute_door_3d_pose_from_detection(rgb_image, depth_final, door_box, 
                                         door_type='door_single', visualize=True, use_da=False):
     try:
-        if use_da:
-            # get RAW depth from DepthAnything model (in meters)
-            depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_image)
-            # apply correction to depth_da_raw using pre-computed calibration coefficients
-            depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
-            # get final depth image (corrected + scaled)
-            # depth_da_final = get_final_depth(depth_image_rs, depth_da_corr)  # TODO need to check
-            depth_final = depth_da_corr
-        else: # while navigation, we can directly use the RS depth as it's more real-time and accurate for non-glass regions, and the robot will be close enough to the door for better depth readings
-            depth_final = depth_image_rs
         # actual bbox coordinates from detection
         bbox = door_box["bbox"]
         x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))

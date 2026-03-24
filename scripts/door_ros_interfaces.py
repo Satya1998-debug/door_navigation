@@ -113,6 +113,56 @@ class DoorDetector:
         self.confidence_threshold = CONFIDENCE_THRESHOLD
         self.img_size = IMG_SIZE  # input image size for the model
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.yolo_model = None
+        self.da_model = None
+
+    def _load_yolo_model(self, model_path=MODEL_PATH):
+        if self.yolo_model is None:
+            from ultralytics import YOLO
+            self.yolo_model = YOLO(model_path)
+            rospy.loginfo(f"YOLO model loaded: {model_path} on {self.device}")
+        return self.yolo_model
+
+    def _load_depth_anything_model(self):
+        if self.da_model is None:
+            from depth_anything_v2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
+
+            model_configs = {
+                'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+                'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+                'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
+            }
+
+            encoder = 'vits'
+            max_depth = 20
+            checkpoint_path = DEPTH_ANYTHING_V2_PATH
+
+            model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
+            model.load_state_dict(torch.load(checkpoint_path, map_location=self.device, weights_only=False))
+            model.to(self.device)
+            model.eval()
+
+            self.da_model = model
+            rospy.loginfo(f"DepthAnythingV2 model loaded with checkpoint: {checkpoint_path} on {self.device}")
+
+        return self.da_model
+
+    def preload_models(self, use_da=True):
+        import time
+        warmup_img = np.zeros((IMG_DIM[1], IMG_DIM[0], 3), dtype=np.uint8)
+
+        # preload the YOLO model so that it won't delay in the first inference
+        t0 = time.time()
+        yolo_model = self._load_yolo_model(self.model_path)
+        _ = yolo_model(source=warmup_img, imgsz=self.img_size, conf=self.confidence_threshold, device=self.device)
+        rospy.loginfo(f"YOLO preload+warmup complete (dt={time.time() - t0:.3f}s)")
+
+        # Preload and warm up DepthAnything only when enabled.
+        if use_da:
+            t1 = time.time()
+            da_model = self._load_depth_anything_model()
+            _ = da_model.infer_image(warmup_img)
+            rospy.loginfo(f"DepthAnything preload+warmup complete (dt={time.time() - t1:.3f}s)")
         
 
     def run_yolo_model(self, model_path=MODEL_PATH, 
@@ -121,15 +171,14 @@ class DoorDetector:
                        confidence_threshold=CONFIDENCE_THRESHOLD,
                        visualize=False):
         try:
-            from ultralytics import YOLO
             import time
             
             if rgb_image is None:
                 print("No RGB image provided for YOLO model inference.")
                 return
 
-            # load the model
-            model = YOLO(model_path)
+            # load once and reuse across frames
+            model = self._load_yolo_model(model_path)
 
             valid_boxes = []
             jsonable_valid_boxes = []
@@ -201,31 +250,7 @@ class DoorDetector:
     def run_depth_anything_v2_on_image(self, img_dir=None, rgb_image=None):
         # img_dir = caliberation_dataset
         try:
-            from depth_anything_v2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
-            
-            # Disable xformers for CPU inference (xformers requires CUDA)
-            # import depth_anything_v2.metric_depth.depth_anything_v2.dinov2_layers.attention as attn_module
-            # if not torch.cuda.is_available():
-            #     attn_module.XFORMERS_AVAILABLE = False
-
-            model_configs = {
-                'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
-                'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
-                'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
-            }
-
-            encoder = 'vits' # or 'vits', 'vitb'
-            # 'hypersim' for indoor model, 'vkitti' for outdoor model
-            max_depth = 20 # 20 for indoor model, 80 for outdoor model
-
-            model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
-            checkpoint_path = DEPTH_ANYTHING_V2_PATH
-            
-            # Set device
-            model.load_state_dict(torch.load(checkpoint_path, map_location=self.device, weights_only=False))
-            model.to(self.device)
-            model.eval()
-            print(f"DepthAnythingV2 model loaded with checkpoint: {checkpoint_path} on {self.device}")
+            model = self._load_depth_anything_model()
 
             if rgb_image is not None: # RGB image CV2 BGR format
                 print(f"Processing the provided RGB image")

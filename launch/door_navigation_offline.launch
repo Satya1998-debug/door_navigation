@@ -3,13 +3,13 @@
     <!-- Offline test launch: publish RGB-D images and run door pipeline -->
 
     <!-- Image files -->
-    <arg name="rgb_image" default="/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_19.jpg"/>
+    <!-- <arg name="rgb_image" default="/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_19.jpg"/>
     <arg name="depth_image" default="/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_depth_lab_19.png"/>
-    <arg name="publish_rate" default="2.0"/>
+    <arg name="publish_rate" default="2.0"/> -->
 
     <!-- Topics from config.py -->
-    <arg name="rgb_topic" default="/camera/color/image_raw"/>
-    <arg name="depth_topic" default="/camera/aligned_depth_to_color/image_raw"/>
+    <!-- <arg name="rgb_topic" default="/camera/color/image_raw"/>
+    <arg name="depth_topic" default="/camera/aligned_depth_to_color/image_raw"/> -->
 
     <!-- Fake TF for offline testing -->
     <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_camera_link"
@@ -39,7 +39,7 @@
 
     <!-- Door pipeline nodes -->
     <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/>
-    <!-- <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/> -->
+    <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
     <!-- <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/> -->
 
 </launch>

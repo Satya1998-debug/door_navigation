@@ -12,6 +12,7 @@ except OSError:
 
 import base64
 import time
+import json
 from ollama import chat
 import cv2
 import numpy as np
@@ -45,6 +46,27 @@ D_DOOR_CLOSED_THRESHOLD = 30
 SAFETY_MARGIN_WIDTH = 0.1  # in meters, additional margin for door pass check
 SLAB_THICKNESS = 0.3  # in meters, thickness of depth slab for door pass check
 MIN_POINTS_PASS_CHECK = 30  # minimum valid depth points in slab region for door pass check
+
+
+def warmup_ollama_vlm(model='qwen3-vl:4b-instruct'):
+    """Warm up Ollama VLM once to reduce first-call latency."""
+    try:
+        s_time = time.time()
+        _ = chat(
+            model=model,
+            messages=[
+                {
+                    'role': 'user',
+                    'content': 'Reply only with valid JSON: {"status":"ok"}'
+                }
+            ],
+            format='json'
+        )
+        print(f"VLM warmup completed in {time.time() - s_time:.2f} seconds")
+        return True
+    except Exception as e:
+        print(f"VLM warmup failed: {e}")
+        return False
 
 def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent="", door_wall_angle="", left_right_door_angle="", door_type=""):
     # directly use ollama api to estimate door state
@@ -106,11 +128,22 @@ def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent=""
         """
         # print(f"Ollama API response: {response}")
 
-        res = response.message.content.strip().lower()
+        res = response.message.content.strip()
         if res:
-            door_state = res
-            # print(f"Estimated door state (VLM): {door_state}")
-            return door_state
+            # Parse JSON payload and normalize keys for downstream service response.
+            parsed = json.loads(res)
+            if isinstance(parsed, str):
+                parsed = json.loads(parsed)
+
+            door_state = str(parsed.get("door_state", "unknown")).strip().lower()
+            human_present = str(parsed.get("human_present", "no")).strip().lower()
+            conversation = str(parsed.get("conversation", "Please open the door.")).strip()
+
+            return {
+                "door_state": door_state,
+                "human_present": human_present,
+                "conversation": conversation,
+            }
         else:
             print("No valid response received from Ollama API.")
             return None
@@ -311,8 +344,10 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
                                                             door_wall_angle=door_opening_angle,
                                                             door_type="single")
             print(f"VLM door state estimation time: {time.time() - s_time:.2f} seconds")
-            door_state_res["is_passable"] = is_passable
-            return door_state_res
+            if isinstance(door_state_res, dict):
+                door_state_res["is_passable"] = is_passable
+                return door_state_res
+            print("Invalid VLM response format. Falling back to geometric state.")
 
         # calculate post door pose
         return {"door_state": door_state, "human_present": "NA", "conversation": "NA", "is_passable": is_passable}
@@ -382,8 +417,10 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
                                                             left_right_door_angle=side_doors_angle,
                                                             door_type="double")
              print(f"VLM door state estimation time: {time.time() - s_time:.2f} seconds")
-             door_state_res["is_passable"] = is_passable
-             return door_state_res
+             if isinstance(door_state_res, dict):
+                 door_state_res["is_passable"] = is_passable
+                 return door_state_res
+             print("Invalid VLM response format. Falling back to geometric state.")
        
         return {"door_state": door_state, "human_present": "NA", "conversation": "NA", "is_passable": is_passable}
 

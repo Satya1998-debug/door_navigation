@@ -1,4 +1,4 @@
-#!/home/satya/venv38/bin python3
+#!/home/ias/satya/venv38/bin/python3
 import rospy
 import actionlib
 import socket

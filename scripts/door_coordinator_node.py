@@ -1,4 +1,4 @@
-#!/home/satya/venv38/bin python3
+#!/home/ias/satya/venv38/bin/python3
 """
 Door Coordinator (Refactored)
 Subscribes to door poses from door_pose_estimator_node and coordinates door traversal logic.
