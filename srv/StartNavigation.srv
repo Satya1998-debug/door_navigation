@@ -1,4 +1,7 @@
-string target
+# request
+string person
+string room
 ---
+# response
 bool success
 string reason

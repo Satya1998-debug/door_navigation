@@ -6,6 +6,7 @@ import audioop
 import json
 import os, sys
 import contextlib
+import time
 from datetime import datetime
 
 # ------ path setup -----
@@ -37,7 +38,7 @@ class VoiceAssistant:
     
     """Handles voice input/output operations for the assistant."""
     
-    def __init__(self):
+    def __init__(self, enable_listening=True):
         
         """Initializes the voice assistant and audio interfaces."""
         self.output_dir = SPEECH_OUTPUT_DIR
@@ -55,27 +56,35 @@ class VoiceAssistant:
         # Keep Vosk logs optional to reduce console noise on embedded targets.
         SetLogLevel(0 if VOSK_ENABLE_LOGS else -1)
         
-        speech_to_text_model_path = SPEECH_RECOGNITION_MODEL_PATH + SPEECH_RECOGNITION_MODEL
-        print(f"Loading Vosk model from: {speech_to_text_model_path}")
-        if not os.path.exists(speech_to_text_model_path): # path: 
-            raise FileNotFoundError("Please download the Vosk model and place it in the working directory.")
+        self.audio_interface = None
+        self.stream = None
+        self.vosk_model = None
+        self.recognizer = None
 
-        self.vosk_model = Model(speech_to_text_model_path)
-        # vocabulary = '["Joachim", "Tür", "öffnen", "schließen", "Hallo", "Hilfe", "Danke", "Auf Wiedersehen", "Grimstad"]'
-        self.recognizer = KaldiRecognizer(self.vosk_model, VOSK_RATE)
+        if enable_listening:
+            speech_to_text_model_path = SPEECH_RECOGNITION_MODEL_PATH + SPEECH_RECOGNITION_MODEL
+            print(f"Loading Vosk model from: {speech_to_text_model_path}")
+            if not os.path.exists(speech_to_text_model_path): # path: 
+                raise FileNotFoundError("Please download the Vosk model and place it in the working directory.")
 
-        with self._maybe_quiet_alsa():
-            self.audio_interface = pyaudio.PyAudio()
-            self.stream = self.audio_interface.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=VOSK_RATE, # this rate 
-                input=True,
-                input_device_index=MIC_DEVICE_INDEX,  # Add this
-                frames_per_buffer=8192
-            )
-        self.stream.start_stream()
-        print("Voice Assistant initialized successfully.")
+            self.vosk_model = Model(speech_to_text_model_path)
+            # vocabulary = '["Joachim", "Tür", "öffnen", "schließen", "Hallo", "Hilfe", "Danke", "Auf Wiedersehen", "Grimstad"]'
+            self.recognizer = KaldiRecognizer(self.vosk_model, VOSK_RATE)
+
+            with self._maybe_quiet_alsa():
+                self.audio_interface = pyaudio.PyAudio()
+                self.stream = self.audio_interface.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=VOSK_RATE, # this rate 
+                    input=True,
+                    input_device_index=MIC_DEVICE_INDEX,  # Add this
+                    frames_per_buffer=8192
+                )
+            self.stream.start_stream()
+            print("Voice Assistant initialized successfully.")
+        else:
+            print("Voice Assistant initialized in TTS-only mode.")
 
     @contextlib.contextmanager
     def _maybe_quiet_alsa(self):
@@ -196,7 +205,7 @@ class VoiceAssistant:
                 )
             return fallback_rate
 
-    def get_voice_input(self):
+    def get_voice_input(self, timeout_sec=None):
         
         """Captures voice input from the user and converts it to lowercase text.
 
@@ -204,8 +213,15 @@ class VoiceAssistant:
             str: Transcribed text from the user's speech.
         """
         
+        if self.stream is None or self.recognizer is None:
+            raise RuntimeError("Voice input requested but listening is disabled.")
+
         print("🎤 Listening... Please speak clearly.")
+        start_time = time.monotonic()
         while True:
+            if timeout_sec is not None and timeout_sec > 0:
+                if time.monotonic() - start_time > timeout_sec:
+                    return ""
             data = self.stream.read(4096, exception_on_overflow=False)
             if self.recognizer.AcceptWaveform(data):
                 result = json.loads(self.recognizer.Result())

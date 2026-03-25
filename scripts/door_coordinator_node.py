@@ -10,6 +10,7 @@ import sys
 import rospy
 import tf2_ros
 import math
+import time
 import numpy as np
 from enum import Enum
 
@@ -35,6 +36,7 @@ if script_dir not in sys.path:
 
 from utils.config import *
 from door_navigation.scripts.door_pose_estimator_utils import get_post_door_pose, get_pre_door_pose
+from voice_assistant import VoiceAssistant
 
 
 class DoorState(Enum):
@@ -56,6 +58,11 @@ class DoorCoordinator:
         self.latest_door_poses = []  # latest door poses from perception for one detection, poses are calculated as and when the are detected
         self.current_door_pose_map = None  # currently handled door
         self.original_goal = None
+        self.use_voice_confirmation = USE_VOICE_CONFIRMATION
+        self.voice_confirmation_timeout_sec = VOICE_CONFIRMATION_TIMEOUT_SEC
+        self.voice_confirmation_max_tries = VOICE_CONFIRMATION_MAX_TRIES
+        self.human_confirmation_cooldown_sec = HUMAN_CONFIRMATION_COOLDOWN_SEC
+        self.last_human_confirmation_prompt_ts = 0.0
         
         # TF listerner setup
         self.tf_buffer = tf2_ros.Buffer()
@@ -85,8 +92,26 @@ class DoorCoordinator:
         except rospy.ROSException:
             rospy.logwarn("Door state estimator service not available, will skip state checks")
             self.door_state_service = None
+
+        # Voice assistant is optional. If unavailable, coordinator still runs.
+        self.voice_assistant = None
+        try:
+            self.voice_assistant = VoiceAssistant(enable_listening=self.use_voice_confirmation)
+            rospy.loginfo("Voice assistant ready for coordinator announcements")
+        except Exception as e:
+            rospy.logwarn(f"Voice assistant unavailable, continuing without speech: {e}")
+            self.use_voice_confirmation = False
         
         rospy.loginfo("DoorCoordinator initialized")
+
+    def _speak(self, text):
+        """Best-effort speech helper that never blocks coordinator on failures."""
+        if not text or self.voice_assistant is None:
+            return
+        try:
+            self.voice_assistant.speak(text)
+        except Exception as e:
+            rospy.logwarn(f"Speech output failed: {e}")
     
     def door_pose_callback(self, msg):
         """Cache latest door poses snapshot"""
@@ -115,6 +140,25 @@ class DoorCoordinator:
         try:
             # SPEAK
             rospy.loginfo(f"Interacting with human: {conversation}")
+
+            if self.use_voice_confirmation and self.voice_assistant is not None:
+                prompt = "Is the door safe to traverse? Please say yes or no."
+                self._speak(prompt)
+                for attempt in range(self.voice_confirmation_max_tries):
+                    feedback = self.voice_assistant.get_voice_input(timeout_sec=self.voice_confirmation_timeout_sec)
+                    if not feedback:
+                        rospy.loginfo(f"No voice confirmation captured (attempt {attempt + 1}/{self.voice_confirmation_max_tries})")
+                        continue
+
+                    fb = feedback.lower()
+                    rospy.loginfo(f"Human voice confirmation: {fb}")
+                    if any(word in fb for word in ["yes", "sure", "go ahead", "okay", "ok"]):
+                        rospy.loginfo(f"Human confirmation received: {conversation}")
+                        return True
+                    if any(word in fb for word in ["no", "wait", "stop", "not safe"]):
+                        return False
+
+                rospy.loginfo("Voice confirmation unavailable, falling back to keyboard input")
             
             # ASK FOR FEEDBACK
             feedback = input("Is the door safe to traverse? (yes/no): ")
@@ -286,6 +330,7 @@ class DoorCoordinator:
             rospy.loginfo("Saved original navigation goal")
         
         rospy.loginfo("Triggering pre-door pose")
+        self._speak("Door detected on path. Moving to pre-door position.")
         pre_goal = self.compute_pre_door_goal()
         if pre_goal:
             self.send_goal(pre_goal)
@@ -296,16 +341,25 @@ class DoorCoordinator:
         if self.door_state_service is not None:
             try:
                 rospy.loginfo("Calling door state estimator service...")
+                self._speak("Checking the door state.")
                 response = self.door_state_service()
                 rospy.loginfo(f"Door state: {response.door_state}, passable: {response.is_passable}, conversation: {response.conversation}")
+                self._speak(response.conversation)
                     
                 if response.is_passable and response.door_state == "open":
                     rospy.loginfo("Door is passable, proceeding through")
-                    # Speech output can be added here using response.conversation if needed
+                    self._speak("Door is open and safe. Proceeding through the door.")
+                    self.last_human_confirmation_prompt_ts = 0.0
                     self.send_post_door_goal()
                     return
                 else:
                     # Human feedback, ask to open the door if not open # TODO
+                    now_ts = time.monotonic()
+                    if now_ts - self.last_human_confirmation_prompt_ts < self.human_confirmation_cooldown_sec:
+                        return
+                    self.last_human_confirmation_prompt_ts = now_ts
+
+                    self._speak("Door is not ready to pass. Waiting for human confirmation.")
                     approved = self.interact_with_human(response.conversation) # TODO: can pass conversation snippet from state estimator to use in human interaction
                         
                     # if YES, perform state eastimation again then proceed
@@ -314,15 +368,19 @@ class DoorCoordinator:
                         self.door_handled = True # passable and the door is handled
                         # SPEAK that robot is proceeding through the door
                         rospy.loginfo("Human confirmed door is safe to traverse")
+                        self._speak("Human confirmed. Proceeding through the door.")
+                        self.last_human_confirmation_prompt_ts = 0.0
                         self.send_post_door_goal()
                         return
                             
             except rospy.ServiceException as e:
                 rospy.logwarn(f"Door state service call failed: {e}")
+                self._speak("Door state service failed. Please check the system.")
     
     def check_pre_door_reached(self):
         if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:
             rospy.loginfo("Reached pre-door pose")
+            self._speak("Reached pre-door position.")
             
             self.state = DoorState.AT_PRE_DOOR
 
@@ -331,6 +389,7 @@ class DoorCoordinator:
         
     def send_post_door_goal(self):
         rospy.loginfo("Sending post-door goal")
+        self._speak("Navigating through the doorway.")
         post_goal = self.compute_post_door_goal()
         if post_goal:
             self.send_goal(post_goal)
@@ -353,11 +412,15 @@ class DoorCoordinator:
             elif self.state == DoorState.TRAVERSING:
                 if self.move_base_client.get_state() == actionlib.GoalStatus.SUCCEEDED:
                     rospy.loginfo("Door traversal complete, resuming original goal")
+                    self._speak("Door traversal complete. Resuming original goal.")
                     if self.original_goal:
                         self.send_goal(self.original_goal)
                         self.original_goal = None
                     self.state = DoorState.NAVIGATING
             rate.sleep()
+
+        if self.voice_assistant is not None:
+            self.voice_assistant.close()
 
 
 if __name__ == "__main__":

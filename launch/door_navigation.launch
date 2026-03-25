@@ -1,11 +1,8 @@
 <?xml version="1.0"?>
 <launch>
     
-    <!-- door detector Node -->
-    <node pkg="door_navigation" type="door_detector_node.py" name="door_detector_node" output="screen"/>
-    
-    <!-- Door Pose Estimator Node -->
-    <node pkg="door_navigation" type="door_pose_estimator_node.py" name="door_pose_estimator_node" output="screen"/>
+    <!-- Door Detector & Pose Estimator Node -->
+    <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/>
     
     <!-- Door State Estimator Service -->
     <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
