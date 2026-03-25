@@ -15,6 +15,7 @@ src/door_navigation/__pycache__
 scripts/utils/__pycache__
 scripts/__pycache__
 scripts/__pycache__/*
+scripts/utils/__pycache__
 scripts/utils/__pycache__/*
 
 # ply files fpr testing
@@ -23,3 +24,9 @@ scripts/utils/__pycache__/*
 # old code files 
 # scripts/old_code
 scripts/old_code/__pycache__
+
+# speech recognition models
+scripts/utils/speech_model/
+
+# speech output
+scripts/output/

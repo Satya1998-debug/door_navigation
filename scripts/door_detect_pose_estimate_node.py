@@ -1,4 +1,4 @@
-#!/home/satya/venv38/bin python3
+#!/home/ias/satya/venv38/bin/python3
 """
 Combined Door Detection and Pose Estimation Node
 
@@ -19,9 +19,7 @@ Benefits:
 import os
 import os
 import sys
-
-import sys
-
+import time
 import rospy
 import tf2_ros
 import tf2_geometry_msgs
@@ -40,7 +38,7 @@ script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
     
-from door_pose_estimator_utils import compute_door_3d_pose_from_detection
+from door_pose_estimator_utils import compute_door_3d_pose_from_detection, compute_da_depth
 from door_ros_interfaces import DoorDetector
 from utils.config import (
     DOOR_DETECTION_TOPIC,
@@ -64,7 +62,7 @@ class DoorDetectionAndPoseNode:
     """Combined node for door detection and 3D pose estimation"""
     
     def __init__(self):
-        self.visualize = True
+        self.visualize = False
         self.use_da = True
         self.max_pose_radius_m = MAX_POSE_RADIUS_M
         rospy.init_node("door_detection_and_pose_node")
@@ -72,6 +70,7 @@ class DoorDetectionAndPoseNode:
         # Door detector (YOLO + depth processing)
         self.door_detector = DoorDetector()
         self.bridge = CvBridge()
+        self.door_detector.preload_models(use_da=self.use_da)
         
         # TF for camera->map transform
         self.tf_buffer = tf2_ros.Buffer()
@@ -122,7 +121,10 @@ class DoorDetectionAndPoseNode:
             return  # skip frame
         
         try:
+            t_pose0 = time.time()
             self.is_processing = True
+            time_diff = abs((rgb_msg.header.stamp - depth_msg.header.stamp).to_sec())
+            rospy.loginfo_throttle(5.0, f"RGB-Depth sync dt={time_diff:.3f}s")
             
             # convert ROS Image messages to OpenCV images
             cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
@@ -133,7 +135,6 @@ class DoorDetectionAndPoseNode:
             cv_depth_image = cv_depth_image.astype(np.float32) / 1000.0 # convert to meters (always need to be in meters)
             
             # Verify synchronization
-            time_diff = abs((rgb_msg.header.stamp - depth_msg.header.stamp).to_sec())
             if time_diff > 0.05:  # 50ms threshold
                 rospy.logwarn(f"RGB-Depth time mismatch: {time_diff*1000:.1f}ms")
             
@@ -141,19 +142,22 @@ class DoorDetectionAndPoseNode:
             self.latest_depth_frame = cv_depth_image
             self.latest_stamp = rgb_msg.header.stamp
             
-            rospy.logdebug_throttle(5.0, f"Processing synchronized RGBD at {rgb_msg.header.stamp.to_sec():.3f}")
+            rospy.loginfo_throttle(5.0, f"Processing synchronized RGBD at {rgb_msg.header.stamp.to_sec():.3f}")
             
             # YOLO detection on RGB image
+            t0 = time.time()
             detections = self.door_detector.run_yolo_model(
                 model_path=MODEL_PATH,
                 rgb_image=self.latest_rgb_frame,
                 img_size=IMG_SIZE,
                 confidence_threshold=CONFIDENCE_THRESHOLD,
-                visualize=True
+                visualize=self.visualize
             )
+            t1 = time.time()
+            rospy.loginfo(f"YOLO inference complete (dt={t1 - t0:.3f}s)")
             
             if len(detections) == 0:
-                rospy.logdebug("No doors detected in this frame")
+                rospy.loginfo("No doors detected in this frame")
                 self.last_detection_time = current_time
                 return
             
@@ -161,6 +165,11 @@ class DoorDetectionAndPoseNode:
             
             # Convert depth to meters for pose estimation
             # depth_image_m = self.latest_depth_frame.astype(np.float32) / 1000.0
+            
+            # compute DA depth once per frame
+            depth_final = compute_da_depth(self.use_da, self.door_detector, 
+                                           self.latest_rgb_frame, 
+                                           self.latest_depth_frame)
             
             
             door_pose_msgs = []
@@ -170,10 +179,13 @@ class DoorDetectionAndPoseNode:
                 
                 # Compute 3D pose (do not publish per-door)
                 if det.get('cls_id') in LABEL_DOORS:
-                    pose_msg = self.compute_pose_message(det, self.latest_rgb_frame, cv_depth_image, rgb_msg.header.stamp)
+                    pose_msg = self.compute_pose_message(det, self.latest_rgb_frame, depth_final, rgb_msg.header.stamp)
                     if pose_msg is not None:
                         door_pose_msgs.append(pose_msg)
                 
+            t_pose1 = time.time()
+            rospy.loginfo(f"Pose estimation complete TOTAL TIME: {t_pose1 - t_pose0:.3f}s)")
+
             if len(door_pose_msgs) > 0:
                 pose_array = DoorPoseArray()
                 pose_array.header.stamp = rgb_msg.header.stamp
@@ -204,12 +216,12 @@ class DoorDetectionAndPoseNode:
             self.detection_pub.publish(msg)
             
             door_type = LABEL_MAP.get(msg.class_id, 'unknown')
-            rospy.logdebug(f"Published detection: {door_type}, conf={msg.confidence:.2f}")
+            rospy.loginfo(f"Published detection: {door_type}, conf={msg.confidence:.2f}")
             
         except Exception as e:
             rospy.logwarn(f"Failed to publish detection: {e}")
     
-    def compute_pose_message(self, detection, rgb_image, depth_image_m, stamp):
+    def compute_pose_message(self, detection, rgb_image, depth_final, stamp):
         """
         Compute 3D pose from detection and return DoorPose message.
         Uses the SAME rgb_image and depth_image that detection was performed on.
@@ -224,23 +236,24 @@ class DoorDetectionAndPoseNode:
             
             # Compute 3D pose in camera frame, does all plane fitting, RANSAC, normal calculations, internally
             # door centre (x, y, z) in camera frame, normal vector (x, y, z), door width in meters
+            t0 = time.time()
             door_centre_cam, normal_vector_cam, door_width = compute_door_3d_pose_from_detection(
                 rgb_image,
-                depth_image_m, # actual rs depth
+                depth_final,
                 door_box_dict,
-                self.door_detector,
                 door_type=door_type,
                 visualize=self.visualize,
                 use_da=self.use_da # not used for pose estimationas its relatively slow
             )
-            
+            t1 = time.time()
+            rospy.loginfo(f"3D pose computation time: {t1 - t0:.3f}s")
             if door_centre_cam is None or normal_vector_cam is None:
                 rospy.logwarn(f"Failed to compute 3D pose for {door_type}")
                 return None
 
             distance = (door_centre_cam[0] ** 2 + door_centre_cam[1] ** 2 + door_centre_cam[2] ** 2) ** 0.5
             if distance > self.max_pose_radius_m: # if door is far away then not considered
-                rospy.logdebug(f"Skipping pose at {distance:.2f}m (> {self.max_pose_radius_m:.2f}m)")
+                rospy.loginfo(f"Skipping pose at {distance:.2f}m (> {self.max_pose_radius_m:.2f}m)")
                 return None
             
             # Transform to map frame
