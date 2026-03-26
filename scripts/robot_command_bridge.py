@@ -1,10 +1,10 @@
 #!/home/ias/satya/venv38/bin/python3
 
 import rospy
-import time
 import subprocess
 from std_srvs.srv import Trigger, TriggerResponse
 from door_navigation.srv import StartNavigation, StartNavigationResponse
+from goal_sender import GoalManager
 
 class RobotCommandBridge:
     def __init__(self):
@@ -13,14 +13,21 @@ class RobotCommandBridge:
         self.door_launch_process = None
         self.door_launch_pkg = "door_navigation"
         self.door_launch_file = "door_navigation.launch"
-        rospy.on_shutdown(self._shutdown_cleanup)
 
+        # Simple navigation backend: publish goal and wait by distance-to-target.
+        self.nav_wait_timeout_sec = 300
+        self.nav_position_tolerance = 0.35
+        
+        # starts the goal manager node in the background, 
+        # which will listen for goal commands
+        self.goal_manager = GoalManager(init_node=False, 
+                                        enable_inactivity_thread=False)
+
+        rospy.on_shutdown(self._shutdown_cleanup)
         # Door coordinator: fast, one-shot command
         rospy.Service("/agent/start_door_coordinator", Trigger, self.start_door_coordinator)
-
-        # Navigation: long-running task (UDP-backed)
+        # Navigation: long-running task
         rospy.Service("/agent/start_navigation", StartNavigation, self.start_navigation)
-
         rospy.loginfo("[Bridge] Robot Command Bridge ready")
 
     def _shutdown_cleanup(self):
@@ -36,31 +43,27 @@ class RobotCommandBridge:
     # Navigation service
     # -------------------------------------------------
 
-    def start_navigation(self, req):
-        rospy.loginfo(f"[NAV] Navigation requested → {req}")
+    def start_navigation(self, req): # req has person and room
+        rospy.loginfo(f"[NAV] Navigation requested -> person: {req.person}, room: {req.room}")
 
         try:
-            # req = {"person": req.person, "room": req.room}
-            # TODO: send navigation goal via goal sender
+            location_key = (req.room or "").strip()
+            if not location_key:
+                location_key = (req.person or "").strip()
+            if not location_key:
+                return StartNavigationResponse(False, "empty_target") # success=False, reason="empty_target"
 
-            # rospy.loginfo("[NAV] Navigation started (UDP)")
-            # time.sleep(5)  # simulate navigation
+            ok, reason = self.goal_manager.send_goal(location_key) # returns (True, "") if goal sent successfully, otherwise (False, "reason")
+            if not ok: # if sending goal failed
+                return StartNavigationResponse(False, reason)
 
-            # TODO: wait for UDP response instead of sleep
-            success_res_udp = True  # set based on UDP response
-
-            if success_res_udp:
-                rospy.loginfo("[NAV] Navigation succeeded")
-                return StartNavigationResponse(
-                    success=True,
-                    reason="arrived"
-                )
-            else:
-                rospy.logerr("[NAV] Navigation failed")
-                return StartNavigationResponse(
-                    success=False,
-                    reason="blocked"
-                )
+            # block and wait until we reach the target or timeout or failure status
+            arrived, wait_reason = self.goal_manager.wait_for_target_reached(timeout_sec=self.nav_wait_timeout_sec,
+                                                                             position_tolerance=self.nav_position_tolerance,
+                                                                             use_status_failures=True,
+                                                                             require_status_success=True,
+                                                                             enable_timeout=True)
+            return StartNavigationResponse(arrived, wait_reason)
 
         except Exception as e:
             rospy.logerr(f"[NAV] Navigation error: {e}")

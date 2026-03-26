@@ -9,6 +9,9 @@
     
     <!-- Door Coordinator Node -->
     <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/>
+
+    <!-- RGB-D Image Publisher Node (testing only, real one is camera node) -->
+    <node pkg="door_navigation" type="image_publisher_test.py" name="image_publisher_node" output="screen"/>
     
     <!--
     <node pkg="rviz" type="rviz" name="door_navigation_rviz" 
