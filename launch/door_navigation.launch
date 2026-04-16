@@ -1,8 +1,14 @@
 <?xml version="1.0"?>
 <launch>
+
+    <!-- Fake TF for offline testing -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_camera_link"
+          args="0 0 0 0 0 0 map camera_link" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_base_link"
+          args="0 0 0 0 0 0 map base_link" />
     
     <!-- Door Detector & Pose Estimator Node -->
-    <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/>
+    <!-- <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/> -->
     
     <!-- Door State Estimator Service -->
     <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
@@ -11,7 +17,7 @@
     <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/>
 
     <!-- RGB-D Image Publisher Node (testing only, real one is camera node) -->
-    <node pkg="door_navigation" type="image_publisher_test.py" name="image_publisher_node" output="screen"/>
+    <!-- <node pkg="door_navigation" type="image_publisher_test.py" name="image_publisher_node" output="screen"/> -->
     
     <!--
     <node pkg="rviz" type="rviz" name="door_navigation_rviz" 

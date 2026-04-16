@@ -21,6 +21,9 @@ CAMERA_INFO_TOPIC = '/camera/color/camera_info'
 DOOR_DETECTION_TOPIC = "/door_detections"
 DOOR_POSE_TOPIC = "/door_poses"
 
+USE_DEPTH_ANYTHING = True  # set to False to disable depth anything and use raw depth instead (for testing)
+USE_VLM = True  # set to False to disable VLM and use only geometric reasoning for state estimation (for testing)
+
 # DOOR navigation parameters
 TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
 POST_DOOR_DISTANCE = 1.5  # meters after door
@@ -72,13 +75,13 @@ CY = 243.65032958984375
 # ---
 
 # speech recognition model
-SPEECH_RECOGNITION_MODEL = "vosk-model-small-en-us-0.15" # "vosk-model-small-en-us-0.15" # "vosk-model-en-us-0.22"
+SPEECH_RECOGNITION_MODEL = "vosk-model-en-us-0.22" # "vosk-model-small-en-us-0.15" # "vosk-model-en-us-0.22"
 SPEECH_RECOGNITION_MODEL_PATH = "/home/ias/satya/catkin_ws/src/door_navigation/scripts/utils/speech_model/"
 SPEECH_OUTPUT_DIR = "/home/ias/satya/catkin_ws/src/door_navigation/scripts/output/"
 VOSK_ENABLE_LOGS = False
 QUIET_ALSA_WARNINGS = True
-SPEAKER_DEVICE_INDEX = 24
-MIC_DEVICE_INDEX = 25
+SPEAKER_DEVICE_INDEX = 26 # default output device (after pavucontrol volume setup)
+MIC_DEVICE_INDEX = 1
 
 # human confirmation behavior in door coordinator
 USE_VOICE_CONFIRMATION = True

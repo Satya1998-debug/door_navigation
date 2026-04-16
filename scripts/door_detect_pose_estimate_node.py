@@ -39,7 +39,7 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
     
 from door_pose_estimator_utils import compute_door_3d_pose_from_detection, compute_da_depth
-from door_ros_interfaces import DoorDetector
+from door_ros_interfaces import get_door_detector_instance
 from utils.config import (
     DOOR_DETECTION_TOPIC,
     DOOR_POSE_TOPIC, 
@@ -68,9 +68,9 @@ class DoorDetectionAndPoseNode:
         rospy.init_node("door_detection_and_pose_node")
         
         # Door detector (YOLO + depth processing)
-        self.door_detector = DoorDetector()
+        self.door_detector = get_door_detector_instance() # preloaded models are already handled
         self.bridge = CvBridge()
-        self.door_detector.preload_models(use_da=self.use_da)
+        # self.door_detector.preload_models(use_da=self.use_da)
         
         # TF for camera->map transform
         self.tf_buffer = tf2_ros.Buffer()

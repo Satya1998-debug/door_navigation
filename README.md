@@ -105,10 +105,6 @@ catkin_make
 ```bash
 sudo apt install python3-catkin-tools
 ```
-- for selective build use: (this performs better than catkin_make for selective builds)
-```bash
-catkin build door_navigation
-```
 
 - configure the workspace but compiles(source code to machine code) only the specified package
 ```bash
@@ -178,4 +174,19 @@ uv pip install ultralytics
 - install ollama python client inside uv venv
 ```bash
 uv pip install ollama
+```
+
+
+
+### Latest CATKIN MAKE
+- after all installations and code changes, build the catkin workspace again to reflect the changes
+```bash
+export SETUPTOOLS_USE_DISTUTILS=stdlib
+catkin_make -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+```
+
+### Run ROS Bridge server
+- to enable communication between ROS and langchain agents, run the rosbridge server
+```bash
+roslaunch rosbridge_server rosbridge_websocket.launch
 ```

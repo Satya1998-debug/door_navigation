@@ -1,9 +1,28 @@
 #!/home/ias/satya/venv38/bin/python3
 
+import sys
+import time
+import os
+import subprocess
+import rospkg
 import rospy
 import subprocess
 from std_srvs.srv import Trigger, TriggerResponse
 from door_navigation.srv import StartNavigation, StartNavigationResponse
+
+# --- path setup ---
+try:
+    rospack = rospkg.RosPack()
+    PACKAGE_PATH = rospack.get_path('door_navigation')
+except (rospkg.ResourceNotFound, rospkg.common.ResourceNotFound):
+    # Fallback: utils/config.py -> scripts/utils -> scripts -> door_navigation
+    PACKAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    print(f"[CONFIG] rospkg not available, using relative path: {PACKAGE_PATH}")
+    
+script_dir = os.path.join(PACKAGE_PATH, 'scripts')
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
 from goal_sender import GoalManager
 
 class RobotCommandBridge:
@@ -29,6 +48,8 @@ class RobotCommandBridge:
         # Navigation: long-running task
         rospy.Service("/agent/start_navigation", StartNavigation, self.start_navigation)
         rospy.loginfo("[Bridge] Robot Command Bridge ready")
+        
+        self.testing = True
 
     def _shutdown_cleanup(self):
         if self.door_launch_process and self.door_launch_process.poll() is None:
@@ -47,6 +68,20 @@ class RobotCommandBridge:
         rospy.loginfo(f"[NAV] Navigation requested -> person: {req.person}, room: {req.room}")
 
         try:
+            if self.testing:
+                rospy.loginfo("[NAV] Testing mode: simulating navigation")
+                time.sleep(5) # simulate some delay
+                
+                # call door state estimator test module
+                from testing.test_interfaces import RosTestInterface
+                test_interface = RosTestInterface(testing=True)
+                if test_interface.call_door_state_estimator():
+                    rospy.loginfo("[NAV] Simulated navigation success after door state estimation")
+                    return StartNavigationResponse(True, "simulated_success")
+                else:
+                    rospy.loginfo("[NAV] Simulated navigation failure after door state estimation")
+                    return StartNavigationResponse(False, "simulated_failure")
+            
             location_key = (req.room or "").strip()
             if not location_key:
                 location_key = (req.person or "").strip()

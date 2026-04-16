@@ -37,7 +37,6 @@ if depth_anything_v2_path not in sys.path:
 from utils.config import *
 from utils.depth_calibration import COEF_QUAD, apply_inverse_depth_correction
 
-
 class RGBDImageReciever:
     # Subscriber class for synchronized RGB and Depth images
     # latest RGB & Depth images are stored in self.latest_frame_color and self.latest_frame_depth
@@ -107,8 +106,8 @@ class DoorDetector:
     # estimates the Depth map from RGB images
     # returns door bounding boxes and corrected depth map (from calibrated model)
     def __init__(self):
-        rospy.loginfo("Initializing Door Detector Node...")
         # model params
+        rospy.loginfo("Initializing Door Detector class...")
         self.model_path = MODEL_PATH
         self.confidence_threshold = CONFIDENCE_THRESHOLD
         self.img_size = IMG_SIZE  # input image size for the model
@@ -297,3 +296,21 @@ class DoorDetector:
             depth_corrected = apply_inverse_depth_correction(depth_da, coef, model=model)
             return depth_corrected
 
+_door_detector_instance = None
+
+def get_door_detector_instance():
+    """Return a process-wide shared DoorDetector instance.
+
+    The instance is created lazily on first call so importing this module
+    does not initialize audio devices or Vosk.
+    """
+    global _door_detector_instance
+    if _door_detector_instance is None:
+        print("Creating shared DoorDetector instance...")
+        _door_detector_instance = DoorDetector()
+        print("Shared DoorDetector instance created.")
+        print("Preloading models for DoorDetector instance...")
+        _door_detector_instance.preload_models(use_da=USE_DEPTH_ANYTHING)  # preload models on first access
+        print("Models preloaded.")
+
+    return _door_detector_instance

@@ -26,7 +26,7 @@ if script_dir not in sys.path:
 from door_navigation.srv import EstimateDoorState, EstimateDoorStateResponse
 from door_state_estimator_utils import estimate_single_door_state, estimate_double_door_state, warmup_ollama_vlm
 from door_pose_estimator_utils import get_final_depth
-from door_ros_interfaces import DoorDetector
+from door_ros_interfaces import get_door_detector_instance
 from utils.utils import crop_to_bbox_depth
 from utils.config import (
     LABEL_DOORS,
@@ -35,7 +35,9 @@ from utils.config import (
     CONFIDENCE_THRESHOLD, 
     IMG_SIZE,
     RGB_TOPIC,
-    DEPTH_TOPIC
+    DEPTH_TOPIC,
+    USE_DEPTH_ANYTHING,
+    USE_VLM,
 )
 
 POSE_PUB_QSIZE = 1
@@ -44,21 +46,16 @@ DEPTH_SUB_QSIZE = 1
 
 WAIT_BEFORE_ESTIMATE = 2.0 # secs waited after reaching pre-goal and before running state estimation
 
-LOCAL_TEST = True
 
 class DoorStateEstimatorService:
     def __init__(self):
         rospy.init_node("door_state_estimator_service")
         
         # Parameters
-        if LOCAL_TEST:
-            self.rgb_topic = RGB_TOPIC
-            self.depth_topic = DEPTH_TOPIC
-        else:
-            self.rgb_topic = RGB_TOPIC
-            self.depth_topic = DEPTH_TOPIC
-        self.use_vlm = True # True in Jetson
-        self.use_da = True
+        self.rgb_topic = RGB_TOPIC
+        self.depth_topic = DEPTH_TOPIC
+        self.use_vlm = USE_VLM
+        self.use_da = USE_DEPTH_ANYTHING
         self.visualize = False
         self.wait_before_estimate = WAIT_BEFORE_ESTIMATE
         
@@ -66,8 +63,8 @@ class DoorStateEstimatorService:
         self.bridge = CvBridge()
 
         # YOLO detector for on-demand re-detection at pre-door
-        self.door_detector = DoorDetector()
-        self.door_detector.preload_models(use_da=self.use_da)
+        self.door_detector = get_door_detector_instance() # preloaded models already handled
+        # self.door_detector.preload_models(use_da=self.use_da)
         if self.use_vlm:
             warmup_ollama_vlm()
 
