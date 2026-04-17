@@ -8,13 +8,13 @@
           args="0 0 0 0 0 0 map base_link" />
     
     <!-- Door Detector & Pose Estimator Node -->
-    <!-- <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/> -->
+    <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/>
     
     <!-- Door State Estimator Service -->
-    <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
+    <!-- <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/> -->
     
     <!-- Door Coordinator Node -->
-    <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/>
+    <!-- <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/> -->
 
     <!-- RGB-D Image Publisher Node (testing only, real one is camera node) -->
     <!-- <node pkg="door_navigation" type="image_publisher_test.py" name="image_publisher_node" output="screen"/> -->

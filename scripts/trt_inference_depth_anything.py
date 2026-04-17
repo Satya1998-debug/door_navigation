@@ -156,6 +156,9 @@ class DepthAnythingTRT:
 
         self.input_h = int(self.inputs[0]['shape'][-2])
         self.input_w = int(self.inputs[0]['shape'][-1])
+        
+        # CRITICAL: Pop the context so it's not "blocking" the thread
+        self.cuda_ctx.pop()
 
     def __del__(self):
         if hasattr(self, "cuda_ctx") and self.cuda_ctx is not None:
@@ -226,21 +229,16 @@ class DepthAnythingTRT:
             return np.zeros_like(depth_map, dtype=np.float32)
         return ((depth_map - depth_min) / (depth_max - depth_min)).astype(np.float32)
 
-    def infer_image(self, bgr_image):
+    def infer_image_no_cudacontext_management(self, bgr_image):
         """
         Main pipeline: Pre -> Inference -> Post
         """
-        # t_total0 = time.perf_counter()
         orig_shape = bgr_image.shape
         
         # 1. Preprocess
-        # t0 = time.perf_counter()
         input_data = self.preprocess(bgr_image)
-        # t1 = time.perf_counter()
         
         # 2. Inference
-        # t2 = time.perf_counter()
-        # Copy input to GPU
         cuda.memcpy_htod(self.inputs[0]['allocation'], input_data)
         
         # Execute
@@ -249,21 +247,36 @@ class DepthAnythingTRT:
         # Copy output back to CPU
         output_data = np.zeros(self.outputs[0]['shape'], dtype=self.outputs[0]['dtype'])
         cuda.memcpy_dtoh(output_data, self.outputs[0]['allocation'])
-        # t3 = time.perf_counter()
         
         # 3. Postprocess
         depth = self.postprocess(output_data, orig_shape)
-        # t4 = time.perf_counter()
 
-        # timing = {
-        #     "preprocess_ms": (t1 - t0) * 1000.0,
-        #     "trt_infer_ms": (t3 - t2) * 1000.0,
-        #     "postprocess_ms": (t4 - t3) * 1000.0,
-        #     "e2e_ms": (t4 - t_total0) * 1000.0,
-        # }
-
-        # if return_timing:
-        #     return depth, timing
+        return depth
+    
+    def infer_image(self, bgr_image):
+        orig_shape = bgr_image.shape
+        input_data = self.preprocess(bgr_image)
+        
+        # --- ACTIVATE ---
+        self.cuda_ctx.push()
+        
+        try:
+            # Move to GPU
+            cuda.memcpy_htod(self.inputs[0]['allocation'], input_data)
+            
+            # Run math
+            self.context.execute_v2(self.allocations)
+            
+            # Bring results back to CPU
+            output_data = np.zeros(self.outputs[0]['shape'], dtype=self.outputs[0]['dtype'])
+            cuda.memcpy_dtoh(output_data, self.outputs[0]['allocation'])
+        finally:
+            # --- DEACTIVATE ---
+            # Using 'finally' ensures the context is popped even if the code crashes
+            self.cuda_ctx.pop()
+        
+        # Postprocess (on CPU)
+        depth = self.postprocess(output_data, orig_shape)
         return depth
 
 # Example Usage:

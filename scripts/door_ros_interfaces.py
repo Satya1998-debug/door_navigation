@@ -117,12 +117,11 @@ class DoorDetector:
         self.yolo_model = None
         self.da_model = None
         self.da_trt_model = None
-        self.da_trt_engine_path = None
 
     def _load_yolo_model(self, model_path=MODEL_PATH):
         if self.yolo_model is None:
             from ultralytics import YOLO
-            self.yolo_model = YOLO(model_path, task='detect', device=self.device)
+            self.yolo_model = YOLO(model_path, task='detect')
             rospy.loginfo(f"YOLO model loaded: {model_path} on {self.device}")
         return self.yolo_model
 
@@ -160,7 +159,7 @@ class DoorDetector:
         _ = yolo_model.predict(source=warmup_img, 
                                imgsz=self.img_size, 
                                conf=self.confidence_threshold, 
-                               device=self.device, task='detect')
+                               device=self.device)
         rospy.loginfo(f"YOLO preload+warmup complete (dt={time.time() - t0:.3f}s)")
 
         # Preload and warm up DepthAnything only when enabled.
@@ -302,7 +301,6 @@ class DoorDetector:
 
         if self.da_trt_model is None:
             self.da_trt_model = DepthAnythingTRT(engine_path)
-            self.da_trt_engine_path = engine_path
             rospy.loginfo(f"DepthAnything TRT model loaded from engine: {engine_path}")
 
         return self.da_trt_model

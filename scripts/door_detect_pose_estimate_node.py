@@ -166,7 +166,7 @@ class DoorDetectionAndPoseNode:
             # Convert depth to meters for pose estimation
             # depth_image_m = self.latest_depth_frame.astype(np.float32) / 1000.0
             
-            # compute DA depth once per frame
+            # compute DA depth once per frame (depth frame is in meters)
             depth_final = compute_da_depth(self.use_da, self.door_detector, 
                                            self.latest_rgb_frame, 
                                            self.latest_depth_frame)
