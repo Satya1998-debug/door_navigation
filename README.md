@@ -190,3 +190,14 @@ catkin_make -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 ```bash
 roslaunch rosbridge_server rosbridge_websocket.launch
 ```
+
+
+# Deployment of Checkpoint Models on Jetson
+- run export script to convert the PyTorch model to ONNX format (run this on x86_64 machine with GPU for faster export)
+```bash
+python3 scripts/tensorrt_export.py
+```
+- use tensorrt trtexec tool to convert the ONNX model to TensorRT engine format (run this on Jetson ARM64 platform)
+```bash 
+/usr/src/tensorrt/bin/trtexec   --onnx=/home/ias/satya/catkin_ws/src/door_navigation/checkpoints/depth_anything_v2_vits.onnx   --saveEngine=/home/ias/satya/catkin_ws/src/door_navigation/checkpoints/depth_anything_v2_vits.engine   --fp16   --workspace=4096   --timingCacheFile=trt_cache.bin   --verbose
+```

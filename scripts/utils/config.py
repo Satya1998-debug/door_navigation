@@ -34,14 +34,14 @@ LOOKAHEAD_POINTS = 80  # tune based on plan density
 # detector parameters
 LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}  # class id to name mapping
 LABEL_DOORS = [0, 1]  # class ids for doors
-MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.pt')  # path to door detection model # last_yolo8m.pt
+MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.engine')  # path to door detection model # last_yolo8m.pt
 DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.json')  # path to save detection results
 CONFIDENCE_THRESHOLD = 0.8
 DETECTION_RATE = 2.0  # Hz
 IMG_SIZE = 640  # input image size for the model
 IMG_DIM = (640, 480)  # original image dimensions (width, height)
 DEPTH_ANYTHING_V2_PATH = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_metric_hypersim_vits.pth')  # path to depth anything v2 model
-
+DEPTH_ANYTHING_V2_PATH_TRT = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_vits.engine')  # path to depth anything v2 model in onnx format for trt inference
 
 # CAMERA INTRINSICS (aligned depth to color), units in pixels
 FX = 385.88861083984375

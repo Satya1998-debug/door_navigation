@@ -102,7 +102,7 @@ class DoorStateEstimatorService:
         """Cache latest synchronized RGB-D frames"""
         try:
             rospy.loginfo_throttle(5.0, f"RGBD callback sync dt={abs((rgb_msg.header.stamp - depth_msg.header.stamp).to_sec()):.3f}s")
-            cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
+            cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8') # convert ROS Image messages to OpenCV images (BGR images)
             cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='16UC1')  # might need to change to pass through actual depth format from camera, but for testing we assume 16UC1 in mm
 
             # if cv_depth_image.dtype == np.float16: # in mm # TODO: verify with actual RGBD data from camera,

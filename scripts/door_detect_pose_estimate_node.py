@@ -126,7 +126,7 @@ class DoorDetectionAndPoseNode:
             time_diff = abs((rgb_msg.header.stamp - depth_msg.header.stamp).to_sec())
             rospy.loginfo_throttle(5.0, f"RGB-Depth sync dt={time_diff:.3f}s")
             
-            # convert ROS Image messages to OpenCV images
+            # convert ROS Image messages to OpenCV images (BGR images)
             cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
             cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='16UC1') # might need to change to pass through actual depth format from camera, but for testing we assume 16UC1 in mm
 

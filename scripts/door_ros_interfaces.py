@@ -36,6 +36,8 @@ if depth_anything_v2_path not in sys.path:
 
 from utils.config import *
 from utils.depth_calibration import COEF_QUAD, apply_inverse_depth_correction
+from trt_inference_depth_anything import DepthAnythingTRT
+
 
 class RGBDImageReciever:
     # Subscriber class for synchronized RGB and Depth images
@@ -114,11 +116,13 @@ class DoorDetector:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.yolo_model = None
         self.da_model = None
+        self.da_trt_model = None
+        self.da_trt_engine_path = None
 
     def _load_yolo_model(self, model_path=MODEL_PATH):
         if self.yolo_model is None:
             from ultralytics import YOLO
-            self.yolo_model = YOLO(model_path)
+            self.yolo_model = YOLO(model_path, task='detect', device=self.device)
             rospy.loginfo(f"YOLO model loaded: {model_path} on {self.device}")
         return self.yolo_model
 
@@ -146,29 +150,38 @@ class DoorDetector:
 
         return self.da_model
 
-    def preload_models(self, use_da=True):
+    def preload_models(self, use_da=True, use_trt=True):
         import time
         warmup_img = np.zeros((IMG_DIM[1], IMG_DIM[0], 3), dtype=np.uint8)
 
         # preload the YOLO model so that it won't delay in the first inference
         t0 = time.time()
         yolo_model = self._load_yolo_model(self.model_path)
-        _ = yolo_model(source=warmup_img, imgsz=self.img_size, conf=self.confidence_threshold, device=self.device)
+        _ = yolo_model.predict(source=warmup_img, 
+                               imgsz=self.img_size, 
+                               conf=self.confidence_threshold, 
+                               device=self.device, task='detect')
         rospy.loginfo(f"YOLO preload+warmup complete (dt={time.time() - t0:.3f}s)")
 
         # Preload and warm up DepthAnything only when enabled.
-        if use_da:
-            t1 = time.time()
-            da_model = self._load_depth_anything_model()
-            _ = da_model.infer_image(warmup_img)
-            rospy.loginfo(f"DepthAnything preload+warmup complete (dt={time.time() - t1:.3f}s)")
+        if use_da: # use TRT model by default
+            t0 = time.time()
+            da_trt_model = self._load_depth_anything_trt_model()
+            warmup_img = np.zeros((IMG_DIM[1], IMG_DIM[0], 3), dtype=np.uint8)
+            _ = da_trt_model.infer_image(warmup_img)
+            rospy.loginfo(f"DepthAnything TRT preload+warmup complete (dt={time.time() - t0:.3f}s)")
+            
+            # t1 = time.time()
+            # da_model = self._load_depth_anything_model()
+            # _ = da_model.infer_image(warmup_img)
+            # rospy.loginfo(f"DepthAnything preload+warmup complete (dt={time.time() - t1:.3f}s)")
         
-
     def run_yolo_model(self, model_path=MODEL_PATH, 
                        rgb_image=None, 
                        img_size=IMG_SIZE, 
                        confidence_threshold=CONFIDENCE_THRESHOLD,
                        visualize=False):
+        # the image is BGR format
         try:
             import time
             
@@ -186,7 +199,9 @@ class DoorDetector:
 
             # run inference
             s_time = time.time()
-            results = model(source=rgb_image, imgsz=img_size, conf=confidence_threshold, device=self.device)
+            results = model.predict(source=rgb_image, imgsz=img_size, 
+                                    conf=confidence_threshold, 
+                                    device=self.device)
             print(f"YOLO inference completed in {time.time() - s_time:.3f} seconds.")
 
             # print results
@@ -246,10 +261,15 @@ class DoorDetector:
             print(f"Error in run_yolo_model: {e}")
             return np.array([])
    
-    def run_depth_anything_v2_on_image(self, img_dir=None, rgb_image=None):
+    def run_depth_anything_v2_on_image(self, img_dir=None, rgb_image=None, use_trt=True):
         # img_dir = caliberation_dataset
         try:
-            model = self._load_depth_anything_model()
+            if use_trt:
+                print("Using DepthAnything TRT model for inference...")
+                model = self._load_depth_anything_trt_model()
+            else:
+                print("Using DepthAnything PyTorch model for inference...")
+                model = self._load_depth_anything_model()
 
             if rgb_image is not None: # RGB image CV2 BGR format
                 print(f"Processing the provided RGB image")
@@ -276,7 +296,17 @@ class DoorDetector:
         except Exception as e:
             print(f"Error in run_depth_anything_v2_on_image: {e}")
             return None
-        
+
+    def _load_depth_anything_trt_model(self):
+        engine_path = DEPTH_ANYTHING_V2_PATH_TRT
+
+        if self.da_trt_model is None:
+            self.da_trt_model = DepthAnythingTRT(engine_path)
+            self.da_trt_engine_path = engine_path
+            rospy.loginfo(f"DepthAnything TRT model loaded from engine: {engine_path}")
+
+        return self.da_trt_model
+
     def get_corrected_depth_image(self, coef=COEF_QUAD, cal_dir=None, model="quad", is_test=False, depth_da=None):
 
         if is_test: # only if testing
