@@ -22,10 +22,6 @@ from tf.transformations import quaternion_from_euler
 import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
-# Import custom messages
-from door_navigation.msg import DoorPoseArray
-from door_navigation.srv import EstimateDoorState
-
 # Path setup
 import rospkg
 rospack = rospkg.RosPack()
@@ -34,9 +30,12 @@ script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
+# Import custom messages
+from door_navigation.msg import DoorPoseArray
+from door_navigation.srv import EstimateDoorState
 from utils.config import *
-from door_navigation.scripts.door_pose_estimator_utils import get_post_door_pose, get_pre_door_pose
-from voice_assistant import VoiceAssistant
+from door_pose_estimator_utils import get_post_door_pose, get_pre_door_pose
+from voice_assistant import get_voice_assistant
 
 
 class DoorState(Enum):
@@ -86,7 +85,7 @@ class DoorCoordinator:
         # Door state estimator service client
         rospy.loginfo("Waiting for door state estimator service...")
         try:
-            rospy.wait_for_service("/door/estimate_state", timeout=5.0)
+            rospy.wait_for_service("/door/estimate_state", timeout=30)
             self.door_state_service = rospy.ServiceProxy("/door/estimate_state", EstimateDoorState)
             rospy.loginfo("Connected to door state estimator service")
         except rospy.ROSException:
@@ -96,8 +95,8 @@ class DoorCoordinator:
         # Voice assistant is optional. If unavailable, coordinator still runs.
         self.voice_assistant = None
         try:
-            self.voice_assistant = VoiceAssistant(enable_listening=self.use_voice_confirmation)
-            rospy.loginfo("Voice assistant ready for coordinator announcements")
+            self.voice_assistant = get_voice_assistant(enable_listening=True)
+            rospy.loginfo("Voice assistant ready for door coordinator announcements")
         except Exception as e:
             rospy.logwarn(f"Voice assistant unavailable, continuing without speech: {e}")
             self.use_voice_confirmation = False
@@ -157,17 +156,17 @@ class DoorCoordinator:
                         return True
                     if any(word in fb for word in ["no", "wait", "stop", "not safe"]):
                         return False
-
+            
+            else:
                 rospy.loginfo("Voice confirmation unavailable, falling back to keyboard input")
-            
-            # ASK FOR FEEDBACK
-            feedback = input("Is the door safe to traverse? (yes/no): ")
-            
-            # Check FEEDBACK
-            if "yes" in feedback.lower() or "sure" in feedback.lower() or "go ahead" in feedback.lower():
-                rospy.loginfo(f"Human confirmation received: {conversation}")
-                return True
-            return False
+                # ASK FOR FEEDBACK
+                feedback = input("Is the door safe to traverse? (yes/no): ")
+                
+                # Check FEEDBACK
+                if "yes" in feedback.lower() or "sure" in feedback.lower() or "go ahead" in feedback.lower():
+                    rospy.loginfo(f"Human confirmation received: {conversation}")
+                    return True
+                return False
         except Exception as e:
             rospy.logwarn(f"Invalid human confirm message: {e}")
             return False

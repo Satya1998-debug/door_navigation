@@ -39,7 +39,7 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
     
 from door_pose_estimator_utils import compute_door_3d_pose_from_detection, compute_da_depth
-from door_ros_interfaces import DoorDetector
+from door_ros_interfaces import get_door_detector_instance
 from utils.config import (
     DOOR_DETECTION_TOPIC,
     DOOR_POSE_TOPIC, 
@@ -68,9 +68,9 @@ class DoorDetectionAndPoseNode:
         rospy.init_node("door_detection_and_pose_node")
         
         # Door detector (YOLO + depth processing)
-        self.door_detector = DoorDetector()
+        self.door_detector = get_door_detector_instance() # preloaded models are already handled
         self.bridge = CvBridge()
-        self.door_detector.preload_models(use_da=self.use_da)
+        # self.door_detector.preload_models(use_da=self.use_da)
         
         # TF for camera->map transform
         self.tf_buffer = tf2_ros.Buffer()
@@ -126,7 +126,7 @@ class DoorDetectionAndPoseNode:
             time_diff = abs((rgb_msg.header.stamp - depth_msg.header.stamp).to_sec())
             rospy.loginfo_throttle(5.0, f"RGB-Depth sync dt={time_diff:.3f}s")
             
-            # convert ROS Image messages to OpenCV images
+            # convert ROS Image messages to OpenCV images (BGR images)
             cv_color_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
             cv_depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='16UC1') # might need to change to pass through actual depth format from camera, but for testing we assume 16UC1 in mm
 
@@ -166,7 +166,7 @@ class DoorDetectionAndPoseNode:
             # Convert depth to meters for pose estimation
             # depth_image_m = self.latest_depth_frame.astype(np.float32) / 1000.0
             
-            # compute DA depth once per frame
+            # compute DA depth once per frame (depth frame is in meters)
             depth_final = compute_da_depth(self.use_da, self.door_detector, 
                                            self.latest_rgb_frame, 
                                            self.latest_depth_frame)

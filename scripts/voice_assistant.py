@@ -1,3 +1,5 @@
+#!/home/ias/satya/venv38/bin/python3
+
 import pyttsx3 # used for text-to-speech conversion
 from vosk import Model, KaldiRecognizer, SetLogLevel # used for speech-to-text recognition
 import pyaudio # used for recording and playing audio (via microphone and speakers)
@@ -22,6 +24,7 @@ script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
     
+import rospy
 from utils.config import (
     SPEECH_RECOGNITION_MODEL_PATH,
     SPEECH_RECOGNITION_MODEL,
@@ -38,7 +41,7 @@ class VoiceAssistant:
     
     """Handles voice input/output operations for the assistant."""
     
-    def __init__(self, enable_listening=True):
+    def __init__(self, enable_listening=False):
         
         """Initializes the voice assistant and audio interfaces."""
         self.output_dir = SPEECH_OUTPUT_DIR
@@ -52,6 +55,7 @@ class VoiceAssistant:
         
         # set espeak properties (tune as needed)
         self.tts_engine.setProperty('rate', 170)  # slower rate for clarity
+        self.tts_engine.setProperty('volume', 0.1)
 
         # Keep Vosk logs optional to reduce console noise on embedded targets.
         SetLogLevel(0 if VOSK_ENABLE_LOGS else -1)
@@ -145,13 +149,20 @@ class VoiceAssistant:
         with self._maybe_quiet_alsa():
             pa = pyaudio.PyAudio()
         stream = None
+        output_device_index = self._resolve_output_device(pa) # None if the ID does not exist or is not set, which will use the system default output device
 
         try:
             with wave.open(filepath, 'rb') as wf:
                 sample_width = wf.getsampwidth()
                 channels = wf.getnchannels()
                 src_rate = wf.getframerate()
-                target_rate = self._select_playback_rate(pa, sample_width, channels, src_rate)
+                target_rate = self._select_playback_rate(
+                    pa,
+                    sample_width,
+                    channels,
+                    src_rate,
+                    output_device_index=output_device_index,
+                )
                 needs_resample = target_rate != src_rate
                 ratecv_state = None
 
@@ -161,7 +172,7 @@ class VoiceAssistant:
                         channels=channels,
                         rate=target_rate,
                         output=True,
-                        output_device_index=SPEAKER_DEVICE_INDEX
+                        output_device_index=output_device_index
                     )
 
                 data = wf.readframes(chunk)
@@ -183,27 +194,46 @@ class VoiceAssistant:
                 stream.close()
             pa.terminate()
 
-    def _select_playback_rate(self, pa, sample_width, channels, src_rate):
+    def _select_playback_rate(self, pa, sample_width, channels, src_rate, output_device_index=None):
         """Return a speaker-supported playback rate, preferring the source WAV rate."""
         output_format = pa.get_format_from_width(sample_width)
         try:
             with self._maybe_quiet_alsa():
-                pa.is_format_supported(
-                    src_rate,
-                    output_device=SPEAKER_DEVICE_INDEX,
-                    output_channels=channels,
-                    output_format=output_format,
-                )
+                kwargs = {
+                    "output_channels": channels,
+                    "output_format": output_format,
+                }
+                if output_device_index is not None:
+                    kwargs["output_device"] = output_device_index
+                pa.is_format_supported(src_rate, **kwargs)
             return src_rate # 44100 Hz
         except ValueError:
-            dev_info = pa.get_device_info_by_index(SPEAKER_DEVICE_INDEX)
-            fallback_rate = int(dev_info.get("defaultSampleRate", 48000)) # Fallback to device default or 48kHz
+            fallback_rate = 48000
+            if output_device_index is not None:
+                dev_info = pa.get_device_info_by_index(output_device_index)
+                fallback_rate = int(dev_info.get("defaultSampleRate", fallback_rate))
             if fallback_rate != src_rate:
                 print(
                     f"[WARN] Playback rate {src_rate} not supported by device "
-                    f"{SPEAKER_DEVICE_INDEX}. Using {fallback_rate} Hz."
+                    f"{output_device_index if output_device_index is not None else 'default'}. "
+                    f"Using {fallback_rate} Hz."
                 )
             return fallback_rate
+
+    def _resolve_output_device(self, pa):
+        """Return a usable output device index or None for system default."""
+        if SPEAKER_DEVICE_INDEX is None or SPEAKER_DEVICE_INDEX < 0:
+            return None
+
+        try:
+            pa.get_device_info_by_index(SPEAKER_DEVICE_INDEX)
+            return SPEAKER_DEVICE_INDEX
+        except Exception as exc:
+            print(
+                f"[WARN] Speaker device index {SPEAKER_DEVICE_INDEX} is invalid: {exc}. "
+                "Falling back to default output device."
+            )
+            return None
 
     def get_voice_input(self, timeout_sec=None):
         
@@ -248,23 +278,40 @@ class VoiceAssistant:
         if hasattr(self, "audio_interface") and self.audio_interface is not None:
             self.audio_interface.terminate()
 
-if __name__ == "__main__":
-    assistant = VoiceAssistant()
-    try:
-        # only play wav file for testing
-        assistant.speak("/home/ias/satya/catkin_ws/src/door_navigation/scripts/output/dog-bark.wav")
-        text_response = "Hello! I am your door navigation assistant. How can I help you today?"
-        assistant.speak(text_response)
-        while True:
-            user_input = assistant.get_voice_input()
-            print(f"You said: {user_input}")
-            if "exit" in user_input or "quit" in user_input:
-                print("Exiting voice assistant.")
-                break
-            response = f"You said: {user_input}"
-            assistant.speak(response)
+_voice_assistant_instance = None
 
-    finally:
-        assistant.close()
+
+def get_voice_assistant(enable_listening=True):
+    """Return a process-wide shared VoiceAssistant instance.
+
+    The instance is created lazily on first call so importing this module
+    does not initialize audio devices or Vosk.
+    """
+    global _voice_assistant_instance
+    if _voice_assistant_instance is None:
+        _voice_assistant_instance = VoiceAssistant(enable_listening=enable_listening)
+    return _voice_assistant_instance
+
+# if __name__ == "__main__":
+#     assistant = VoiceAssistant(enable_listening=True)
+#     try:
+#         # only play wav file for testing
+#         # assistant.speak("/home/ias/satya/catkin_ws/src/door_navigation/scripts/output/dog-bark.wav")
+#         text_response = "Hello! I am your door navigation assistant. How can I help you today?"
+#         assistant.speak(text_response)
+#         # if assistant.recognizer is None:
+#         #     print("Listening is disabled. Enable listening to use voice input.")
+#         # else:
+#         #     while True:
+#         #         user_input = assistant.get_voice_input()
+#         #         print(f"You said: {user_input}")
+#         #         if "exit" in user_input or "quit" in user_input:
+#         #             print("Exiting voice assistant.")
+#         #             break
+#         #         response = f"You said: {user_input}"
+#         #         assistant.speak(response)
+
+#     finally:
+#         assistant.close()
     
  

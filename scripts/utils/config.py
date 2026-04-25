@@ -21,6 +21,9 @@ CAMERA_INFO_TOPIC = '/camera/color/camera_info'
 DOOR_DETECTION_TOPIC = "/door_detections"
 DOOR_POSE_TOPIC = "/door_poses"
 
+USE_DEPTH_ANYTHING = True  # set to False to disable depth anything and use raw depth instead (for testing)
+USE_VLM = True  # set to False to disable VLM and use only geometric reasoning for state estimation (for testing)
+
 # DOOR navigation parameters
 TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
 POST_DOOR_DISTANCE = 1.5  # meters after door
@@ -31,14 +34,14 @@ LOOKAHEAD_POINTS = 80  # tune based on plan density
 # detector parameters
 LABEL_MAP = {0: 'door_double', 1: 'door_single', 2: 'handle'}  # class id to name mapping
 LABEL_DOORS = [0, 1]  # class ids for doors
-MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.pt')  # path to door detection model # last_yolo8m.pt
+MODEL_PATH = os.path.join(PACKAGE_PATH, 'weights', 'last_yolo11m_ias_door_type1.engine')  # path to door detection model # last_yolo8m.pt
 DETECTION_JSON_PATH = os.path.join(PACKAGE_PATH, 'scripts', 'door_detections.json')  # path to save detection results
 CONFIDENCE_THRESHOLD = 0.8
-DETECTION_RATE = 2.0  # Hz
+DETECTION_RATE = 6  # Hz (should be more than image publish rate to avoid missing frames)
 IMG_SIZE = 640  # input image size for the model
 IMG_DIM = (640, 480)  # original image dimensions (width, height)
 DEPTH_ANYTHING_V2_PATH = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_metric_hypersim_vits.pth')  # path to depth anything v2 model
-
+DEPTH_ANYTHING_V2_PATH_TRT = os.path.join(PACKAGE_PATH, 'checkpoints', 'depth_anything_v2_vits.engine')  # path to depth anything v2 model in onnx format for trt inference
 
 # CAMERA INTRINSICS (aligned depth to color), units in pixels
 FX = 385.88861083984375
@@ -72,13 +75,13 @@ CY = 243.65032958984375
 # ---
 
 # speech recognition model
-SPEECH_RECOGNITION_MODEL = "vosk-model-small-en-us-0.15" # "vosk-model-small-en-us-0.15" # "vosk-model-en-us-0.22"
+SPEECH_RECOGNITION_MODEL = "vosk-model-en-us-0.22" # "vosk-model-small-en-us-0.15" # "vosk-model-en-us-0.22"
 SPEECH_RECOGNITION_MODEL_PATH = "/home/ias/satya/catkin_ws/src/door_navigation/scripts/utils/speech_model/"
 SPEECH_OUTPUT_DIR = "/home/ias/satya/catkin_ws/src/door_navigation/scripts/output/"
 VOSK_ENABLE_LOGS = False
 QUIET_ALSA_WARNINGS = True
-SPEAKER_DEVICE_INDEX = 24
-MIC_DEVICE_INDEX = 25
+SPEAKER_DEVICE_INDEX = 26 # default output device (after pavucontrol volume setup)
+MIC_DEVICE_INDEX = 1
 
 # human confirmation behavior in door coordinator
 USE_VOICE_CONFIRMATION = True
