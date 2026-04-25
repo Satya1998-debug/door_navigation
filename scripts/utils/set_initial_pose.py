@@ -108,7 +108,7 @@ if __name__ == '__main__':
     parser.add_argument('--deg', type=float, 
                         help='Yaw orientation in degrees')
     parser.add_argument('--yaml', type=str, 
-                        default='/home/satya/MT/catkin_ws/src/a2_ros2udp/params/locations.yaml',
+                        default='/home/satya/MT/catkin_ws/src/door_navigation/saved_locations.yaml',
                         help='Path to locations.yaml file')
     
     args = parser.parse_args()
