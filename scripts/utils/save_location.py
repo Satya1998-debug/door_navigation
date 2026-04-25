@@ -12,7 +12,7 @@ import argparse
 import os
 from pathlib import Path
 
-def save_current_pose(location_name, output_file="saved_locations.yaml"):
+def save_current_pose(location_name, output_file="saved_locations_new.yaml"):
     """Save current robot pose from TF to YAML file."""
     
     rospy.init_node('save_location', anonymous=True)
