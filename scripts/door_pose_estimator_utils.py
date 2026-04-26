@@ -52,6 +52,12 @@ def fit_plane(points_3d, ply_file_name=""):
     try:
         pcd = o3d.geometry.PointCloud() # empty point cloud
         pcd.points = o3d.utility.Vector3dVector(points_3d) # assign points to point cloud
+        
+        # chec dimesnions of point cloud
+        # # Calculate the bounding box dimensions
+        # min_coords = np.min(points_3d, axis=0)
+        # max_coords = np.max(points_3d, axis=0)
+        # dimensions = max_coords - min_coords
 
         # save point cloud for visualization/debugging
         if ply_file_name:
@@ -365,9 +371,8 @@ def test_pose_estimator(img_path, visualize=True):
 
     s_time = time.time()
     compute_door_3d_pose_from_detection(rgb_image=rgb_rs, 
-                                        depth_image=depth_final, 
+                                        depth_final=depth_final, 
                                         door_box=door_box,
-                                        door_detector=door_detector,
                                         door_type=door_type,
                                         visualize=visualize)
     print(f"Door pose estimation time: {time.time() - s_time:.3f} seconds")
