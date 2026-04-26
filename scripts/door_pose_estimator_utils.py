@@ -342,7 +342,7 @@ def test_pose_estimator(img_path, visualize=True):
     door_detector = DoorDetector()
     # get RAW depth from DepthAnything model (in meters)
     s_time = time.time()
-    depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs)
+    depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs, use_trt=False)
     print(f"DAv2 inference time: {time.time() - s_time:.3f} seconds")
     # apply correction to depth_da_raw using pre-computed calibration coefficients
     depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
@@ -375,7 +375,7 @@ def test_pose_estimator(img_path, visualize=True):
 
 if __name__ == "__main__":
 
-    img_id = 63
+    img_id = 35
     # loads RGB 
-    IMAGE_PATH = f"/home/ias/satya/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_{img_id}.jpg"
-    test_pose_estimator(IMAGE_PATH, visualize=False)
+    IMAGE_PATH = f"/home/satya/MT/catkin_ws/src/door_navigation/scripts/data_new/latest_image_color_lab_{img_id}.jpg"
+    test_pose_estimator(IMAGE_PATH, visualize=True)
