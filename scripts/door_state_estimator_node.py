@@ -14,11 +14,16 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 import message_filters
 import threading
-
-# Path setup
 import rospkg
-rospack = rospkg.RosPack()
-PACKAGE_PATH = rospack.get_path('door_navigation')
+
+# ------ path setup -----
+try:
+    rospack = rospkg.RosPack()
+    PACKAGE_PATH = rospack.get_path('door_navigation')
+except (rospkg.ResourceNotFound, rospkg.common.ResourceNotFound):
+    PACKAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    print(f"[door-pose-estimator] rospkg not available, using relative path: {PACKAGE_PATH}")
+
 script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)

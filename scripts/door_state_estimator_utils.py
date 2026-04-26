@@ -19,11 +19,13 @@ import numpy as np
 
 # Path setup
 import rospkg
-rospack = rospkg.RosPack()
-PACKAGE_PATH = rospack.get_path('door_navigation')
-script_dir = os.path.join(PACKAGE_PATH, 'scripts')
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
+try:
+    rospack = rospkg.RosPack()
+    PACKAGE_PATH = rospack.get_path('door_navigation')
+except (rospkg.ResourceNotFound, rospkg.common.ResourceNotFound):
+    PACKAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    print(f"[door-pose-estimator] rospkg not available, using relative path: {PACKAGE_PATH}")
+
 
 from door_ros_interfaces import DoorDetector
 from door_pose_estimator_utils import fit_plane, project_to_3d, visualize_plane_with_normal
@@ -429,19 +431,19 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         print(f"Error in estimate_double_door_state: {e}")
         return None
 
-def estimate_door_state(img_path, depth_path, visualize=True, use_vlm=False):
+def estimate_door_state_test(img_path, depth_path, visualize=True, use_vlm=False):
     # NOTE: this is executed at the Pre-Pose stage, before robot moves through the door
     try:
         # loads RGB 
         rgb_rs = cv2.imread(img_path) # numpy array HWC
         
         # loads depth map
-        depth_rs = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0  # convert mm to meters
+        # depth_rs = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0  # convert mm to meters
 
         door_detector = DoorDetector()  # initialize door detector
         # get RAW depth from DA model (in meters)
         s_time = time.time()
-        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs)
+        depth_da = door_detector.run_depth_anything_v2_on_image(rgb_image=rgb_rs, use_trt=False)
         print(f"Depth Anything v2 inference time: {time.time() - s_time:.2f} seconds")
         # apply correction to depth_da_raw using pre-computed calibration coefficients
         depth_da_corr = door_detector.get_corrected_depth_image(depth_da=depth_da, model="quad")
@@ -493,7 +495,7 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # single door: 19(normal-closed), 63(normal-semi-open), 66(glass-closed)
     # double door: 27(glass-closed), 30(glass-closed), 35(glass-semi-open)
-    img_id = 63
+    img_id = 35
     img_path = os.path.join(script_dir, f"data_new/latest_image_color_lab_{img_id}.jpg")
     depth_path = os.path.join(script_dir, f"data_new/latest_image_depth_lab_{img_id}.png")
-    estimate_door_state(img_path, depth_path, visualize=False, use_vlm=True)
+    estimate_door_state_test(img_path, depth_path, visualize=True, use_vlm=False)

@@ -11,11 +11,17 @@ import sys
 
 import cv2
 import numpy as np
+import rospkg
 
 # Path setup for local imports
-import rospkg
-rospack = rospkg.RosPack()
-PACKAGE_PATH = rospack.get_path('door_navigation')
+# ------ path setup -----
+try:
+    rospack = rospkg.RosPack()
+    PACKAGE_PATH = rospack.get_path('door_navigation')
+except (rospkg.ResourceNotFound, rospkg.common.ResourceNotFound):
+    PACKAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    print(f"[door-pose-estimator] rospkg not available, using relative path: {PACKAGE_PATH}")
+
 script_dir = os.path.join(PACKAGE_PATH, 'scripts')
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
@@ -157,7 +163,7 @@ def main(img_id):
 
     # DepthAnything inference
     detector = DoorDetector()
-    depth_da = detector.run_depth_anything_v2_on_image(rgb_image=rgb)
+    depth_da = detector.run_depth_anything_v2_on_image(rgb_image=rgb, use_trt=False)
     #depth_da_corr = depth_da.copy()
     
     # callibrate the raw DA depth
@@ -191,19 +197,14 @@ def main(img_id):
     if depth_da_color.shape[:2] != depth_rs_color.shape[:2]:
         depth_da_color = cv2.resize(depth_da_color, (depth_rs_color.shape[1], depth_rs_color.shape[0]))
 
-    if depth_da_corr_color.shape[:2] != depth_rs_color.shape[:2]:
-        depth_da_corr_color = cv2.resize(depth_da_corr_color, (depth_rs_color.shape[1], depth_rs_color.shape[0]))
-
-    # Build 2x2 grid:
-    # [ RGB | RS depth ]
-    # [ DA  | DA corrected ]
+    # Build 1x3 grid:
+    # [ RGB | RS depth | DA depth ]
     rgb_vis = rgb.copy()
     if rgb_vis.shape[:2] != depth_rs_color.shape[:2]:
         rgb_vis = cv2.resize(rgb_vis, (depth_rs_color.shape[1], depth_rs_color.shape[0]))
 
-    top_row = np.hstack([rgb_vis, depth_rs_color])
-    bottom_row = np.hstack([depth_da_color, depth_da_corr_color])
-    grid = np.vstack([top_row, bottom_row])
+    row = np.hstack([rgb_vis, depth_rs_color, depth_da_color])
+    grid = row  # For compatibility, but we'll use row later
 
     # Stats for RS depth (reusing valid_rs)
     if valid_rs.size:
@@ -224,20 +225,10 @@ def main(img_id):
     else:
         stats_text_da = "DA depth (m): no valid pixels"
 
-    # Stats for corrected DepthAnything
-    valid_da_corr = depth_da_corr[np.isfinite(depth_da_corr) & (depth_da_corr > 0)]
-    if valid_da_corr.size:
-        stats_text_da_corr = (
-            f"DA Corrected depth (m): min={np.min(valid_da_corr):.2f}, max={np.max(valid_da_corr):.2f}, "
-            f"mean={np.mean(valid_da_corr):.2f}, median={np.median(valid_da_corr):.2f}"
-        )
-    else:
-        stats_text_da_corr = "DA Corrected depth (m): no valid pixels"
-
-    window_name = "2x2: RGB | RS | DA | DA Corrected"
+    window_name = "RGB | RS Depth | DA Depth"
 
     # Mouse hover: show depth values at cursor for all depth panes
-    cursor_info = {"x": -1, "y": -1, "px": -1, "py": -1, "pane": "NA", "rs": None, "da": None, "da_corr": None, "diff": None}
+    cursor_info = {"x": -1, "y": -1, "px": -1, "py": -1, "pane": "NA", "rs": None, "da": None, "diff": None}
 
     def on_mouse(event, x, y, flags, param):
         if event == cv2.EVENT_MOUSEMOVE:
@@ -251,26 +242,21 @@ def main(img_id):
             elif w <= x < 2 * w and 0 <= y < h:
                 pane = "RS"
                 px, py = x - w, y
-            elif 0 <= x < w and h <= y < 2 * h:
+            elif 2 * w <= x < 3 * w and 0 <= y < h:
                 pane = "DA"
-                px, py = x, y - h
-            elif w <= x < 2 * w and h <= y < 2 * h:
-                pane = "DA_CORR"
-                px, py = x - w, y - h
+                px, py = x - 2 * w, y
 
             if px is not None and py is not None:
                 rs_val = depth_rs[py, px]
                 da_val = depth_da[py, px]
-                da_corr_val = depth_da_corr[py, px]
             else:
                 rs_val = None
                 da_val = None
-                da_corr_val = None
 
-            # compute diff RS - DA_corr for hover
+            # compute diff RS - DA for hover
             if px is not None and py is not None:
                 try:
-                    diff_val = depth_rs[py, px] - depth_da_corr[py, px]
+                    diff_val = depth_rs[py, px] - depth_da[py, px]
                 except Exception:
                     diff_val = None
             else:
@@ -283,65 +269,69 @@ def main(img_id):
             cursor_info["pane"] = pane
             cursor_info["rs"] = float(rs_val) if (rs_val is not None and np.isfinite(rs_val)) else None
             cursor_info["da"] = float(da_val) if (da_val is not None and np.isfinite(da_val)) else None
-            cursor_info["da_corr"] = float(da_corr_val) if (da_corr_val is not None and np.isfinite(da_corr_val)) else None
             cursor_info["diff"] = float(diff_val) if (diff_val is not None and np.isfinite(diff_val)) else None
 
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, 1600, 1000)
+    cv2.resizeWindow(window_name, 1800, 600)
     cv2.setMouseCallback(window_name, on_mouse)
 
     while True:
-        display = grid.copy()
+        display = row.copy()
 
         # Pane labels
         cv2.putText(display, "RGB", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         cv2.putText(display, "RS Depth", (depth_rs.shape[1] + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        cv2.putText(display, "DA Depth", (10, depth_rs.shape[0] + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        cv2.putText(display, "DA Corrected", (depth_rs.shape[1] + 10, depth_rs.shape[0] + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(display, "DA Depth", (2 * depth_rs.shape[1] + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        # Overlay stats
-        cv2.putText(display, stats_text_rs, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(display, stats_text_da, (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(display, stats_text_da_corr, (10, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # Overlay stats on respective panes
+        w = depth_rs.shape[1]
+        if valid_rs.size:
+            cv2.putText(display, f"RS min={np.min(valid_rs):.2f}, max={np.max(valid_rs):.2f}", (w + 10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(display, f"RS mean={np.mean(valid_rs):.2f}, median={np.median(valid_rs):.2f}", (w + 10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        else:
+            cv2.putText(display, "RS depth (m): no valid pixels", (w + 10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-        # Compute signed RS - DA_corr difference stats (no color overlay)
+        if valid_da.size:
+            cv2.putText(display, f"DA min={np.min(valid_da):.2f}, max={np.max(valid_da):.2f}", (2*w + 10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(display, f"DA mean={np.mean(valid_da):.2f}, median={np.median(valid_da):.2f}", (2*w + 10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        else:
+            cv2.putText(display, "DA depth (m): no valid pixels", (2*w + 10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # Compute signed RS - DA difference stats (no color overlay)
         try:
-            depth_diff = depth_rs - depth_da_corr
+            depth_diff = depth_rs - depth_da
             valid_mask = np.isfinite(depth_diff)
             valid_vals = depth_diff[valid_mask]
             if valid_vals.size:
                 stats_text_diff = (
-                    f"RS-DAcorr diff (m): min={np.min(valid_vals):.3f}, max={np.max(valid_vals):.3f}, "
+                    f"RS-DA diff (m): min={np.min(valid_vals):.3f}, max={np.max(valid_vals):.3f}, "
                     f"mean={np.mean(valid_vals):.3f}, median={np.median(valid_vals):.3f}"
                 )
             else:
-                stats_text_diff = "RS-DAcorr diff (m): no valid pixels"
+                stats_text_diff = "RS-DA diff (m): no valid pixels"
 
-            cv2.putText(display, stats_text_diff, (10, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+            cv2.putText(display, stats_text_diff, (10, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         except Exception:
             pass
 
         # Overlay cursor depth for both RS and DA at the same pixel
-        if cursor_info["rs"] is not None or cursor_info["da"] is not None or cursor_info["da_corr"] is not None:
+        if cursor_info["rs"] is not None or cursor_info["da"] is not None:
             rs_text = "RS z=NA"
             da_text = "DA z=NA"
-            da_corr_text = "DA Corrected z=NA"
             if cursor_info["rs"] is not None:
                 rs_text = f"RS z={cursor_info['rs']:.3f} m"
             if cursor_info["da"] is not None:
                 da_text = f"DA z={cursor_info['da']:.3f} m"
-            if cursor_info["da_corr"] is not None:
-                da_corr_text = f"DA Corrected z={cursor_info['da_corr']:.3f} m"
 
             diff_text = "diff=NA"
             if cursor_info.get("diff") is not None:
-                diff_text = f"RS-DAcorr={cursor_info['diff']:.3f} m"
+                diff_text = f"RS-DA={cursor_info['diff']:.3f} m"
 
             text = (
                 f"hover pane={cursor_info['pane']}  panel_xy=({cursor_info['x']},{cursor_info['y']}) "
-                f"img_xy=({cursor_info['px']},{cursor_info['py']})  {rs_text} | {da_text} | {da_corr_text} | {diff_text}"
+                f"img_xy=({cursor_info['px']},{cursor_info['py']})  {rs_text} | {da_text} | {diff_text}"
             )
-            cv2.putText(display, text, (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(display, text, (10, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         cv2.imshow(window_name, display)
         key = cv2.waitKey(20) & 0xFF

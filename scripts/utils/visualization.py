@@ -235,7 +235,7 @@ def visualize_door_passability(
         slab_bbox = o3d.geometry.LineSet()
         slab_bbox.points = o3d.utility.Vector3dVector(slab_bbox_points)
         slab_bbox.lines = o3d.utility.Vector2iVector(slab_bbox_lines)
-        slab_bbox.colors = o3d.utility.Vector3dVector([[1, 1, 0]] * len(slab_bbox_lines))
+        slab_bbox.colors = o3d.utility.Vector3dVector([[1, 0, 0]] * len(slab_bbox_lines)) # red bounding box for slab
 
         # FREE GAP line (GREEN)
         y_mid = np.median(Y)
