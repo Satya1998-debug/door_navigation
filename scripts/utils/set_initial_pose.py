@@ -17,8 +17,8 @@ import math
 
 def set_initial_pose(x, y, yaw):
     """Publish initial pose to /initialpose topic."""
-    pub = rospy.Publisher('/initialpose', PoseWithCovarianceStamped, queue_size=1, latch=True)
     rospy.init_node('set_initial_pose', anonymous=True)
+    pub = rospy.Publisher('/initialpose', PoseWithCovarianceStamped, queue_size=1, latch=True)
     rospy.sleep(1.0)  # Wait for publisher to be ready
     
     initial_pose = PoseWithCovarianceStamped()
@@ -108,7 +108,7 @@ if __name__ == '__main__':
     parser.add_argument('--deg', type=float, 
                         help='Yaw orientation in degrees')
     parser.add_argument('--yaml', type=str, 
-                        default='/home/satya/MT/catkin_ws/src/door_navigation/saved_locations.yaml',
+                        default='/home/satya/MT/catkin_ws/src/door_navigation/saved_locations_iaslab2.yaml',
                         help='Path to locations.yaml file')
     
     args = parser.parse_args()

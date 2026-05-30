@@ -243,7 +243,12 @@ class DoorDetector:
                     cls_id = vb['cls_id']
                     cv2.rectangle(color_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     label = f"{LABEL_MAP.get(cls_id, 'Unknown')} {conf:.2f}"
-                    cv2.putText(color_image, label, (x1, y1 - 10), 
+                    
+                    # Determine where to put the label
+                    # If the box is too close to the top, move the label inside
+                    y_label = y1 - 10 if y1 > 20 else y1 + 20
+                    
+                    cv2.putText(color_image, label, (x1, y_label), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                 
                 try:
