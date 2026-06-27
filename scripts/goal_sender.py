@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 import rospy
 from geometry_msgs.msg import PoseStamped
 from actionlib_msgs.msg import GoalStatusArray
@@ -21,7 +22,7 @@ BASE_FRAME = 'base_link'
 POSITION_TOLERANCE = 0.35  # meters
 
 class GoalManager:
-    def __init__(self, init_node=True, enable_inactivity_thread=True):
+    def __init__(self, init_node=True, enable_inactivity_thread=True, locations_yaml_path=None):
         if init_node:
             rospy.init_node('goal_sender', anonymous=True)
 
@@ -36,6 +37,9 @@ class GoalManager:
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+
+        # Optional explicit YAML path override for standalone usage.
+        self.locations_yaml_path = locations_yaml_path
 
         # Load locations from YAML file
         self.locations = self.load_locations(self._resolve_locations_yaml())
@@ -65,11 +69,16 @@ class GoalManager:
         """Pick the locations YAML to load.
 
         Priority:
-          1. ROS param ``~locations_yaml`` (explicit override).
-          2. ``saved_locations.yaml`` inside the door_navigation package.
-          3. First matching ``saved_locations*.yaml`` in the package (sorted).
-          4. Legacy hardcoded Unitree path (will fail loudly if missing).
+          1. Explicit constructor override (standalone CLI).
+          2. ROS param ``~locations_yaml`` (explicit override).
+          3. ``saved_locations.yaml`` inside the door_navigation package.
+          4. First matching ``saved_locations*.yaml`` in the package (sorted).
+          5. Legacy hardcoded Unitree path (will fail loudly if missing).
         """
+        if self.locations_yaml_path:
+            rospy.loginfo("locations_yaml (from argument): %s", self.locations_yaml_path)
+            return self.locations_yaml_path
+
         param_path = rospy.get_param('~locations_yaml', '')
         if param_path:
             rospy.loginfo("locations_yaml (from ROS param): %s", param_path)
@@ -256,3 +265,68 @@ class GoalManager:
                     self.command_received = False  # Reset command received flag
                     self.goal_reached = False  # Reset goal reached flag
             rate.sleep()
+
+
+if __name__ == "__main__":
+    # USAGE:
+    # send location
+    # rosrun door_navigation goal_sender.py --yaml /home/ias/satya/catkin_ws/src/door_navigation/saved_locations_iaslab1.yaml home
+    # list locations
+    # rosrun door_navigation goal_sender.py --yaml /home/ias/satya/catkin_ws/src/door_navigation/saved_locations_iaslab1.yaml --list
+    try:
+        parser = argparse.ArgumentParser(
+            description="Send saved navigation goals by location name."
+        )
+        parser.add_argument(
+            "target",
+            nargs="?",
+            help="Location name from the YAML file (optional; prompts if omitted).",
+        )
+        parser.add_argument(
+            "-l", "--list",
+            action="store_true",
+            help="List available location names and exit.",
+        )
+        parser.add_argument(
+            "-y", "--yaml",
+            dest="yaml_path",
+            default=None,
+            help="Path to locations YAML file to use.",
+        )
+
+        cli_args = parser.parse_args(rospy.myargv()[1:])
+        yaml_override = os.path.expanduser(cli_args.yaml_path) if cli_args.yaml_path else None
+
+        gm = GoalManager(
+            init_node=True,
+            enable_inactivity_thread=False,
+            locations_yaml_path=yaml_override,
+        )
+
+        if not gm.locations:
+            rospy.logerr("No locations available. Check ~locations_yaml.")
+            raise SystemExit(1)
+
+        if cli_args.list:
+            rospy.loginfo("Available locations:")
+            for name in sorted(gm.locations.keys()):
+                rospy.loginfo("  - %s", name)
+            raise SystemExit(0)
+
+        if cli_args.target:
+            target = cli_args.target
+        else:
+            print("\nAvailable locations:")
+            for name in sorted(gm.locations.keys()):
+                print(f"  - {name}")
+            target = input("\nEnter location name: ").strip()
+
+        ok, reason = gm.send_goal(target)
+        if not ok:
+            rospy.logerr("Failed to send goal: %s", reason)
+            raise SystemExit(1)
+
+        rospy.loginfo("Goal accepted: %s", reason)
+        rospy.loginfo("Use `rostopic echo /move_base/status` to monitor progress.")
+    except rospy.ROSInterruptException:
+        pass
