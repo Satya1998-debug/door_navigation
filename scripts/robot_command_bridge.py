@@ -96,7 +96,7 @@ class RobotCommandBridge:
             arrived, wait_reason = self.goal_manager.wait_for_target_reached(timeout_sec=self.nav_wait_timeout_sec,
                                                                              position_tolerance=self.nav_position_tolerance,
                                                                              use_status_failures=True,
-                                                                             require_status_success=True,
+                                                                             enable_status_check=True,
                                                                              enable_timeout=True)
             return StartNavigationResponse(arrived, wait_reason)
 

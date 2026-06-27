@@ -57,6 +57,7 @@ from utils.config import (
     CAMERA_INFO_TOPIC,
     CAM_OPTICAL_FRAME,
     MAP_FRAME,
+    PRE_DOOR_DISTANCE,
 )
 from utils.utils import crop_to_bbox_depth
 
@@ -217,9 +218,9 @@ class DoorDetectionAndPoseNode:
             ]
             marker_array.markers.append(normal_marker)
 
-            pre_goal_x = door.position.x + door.normal.x * self.max_pose_radius_m
-            pre_goal_y = door.position.y + door.normal.y * self.max_pose_radius_m
-            pre_goal_z = door.position.z + door.normal.z * self.max_pose_radius_m
+            pre_goal_x = door.position.x + door.normal.x * PRE_DOOR_DISTANCE
+            pre_goal_y = door.position.y + door.normal.y * PRE_DOOR_DISTANCE
+            pre_goal_z = door.position.z + door.normal.z * PRE_DOOR_DISTANCE
 
             pre_marker = Marker()
             pre_marker.header.frame_id = "map"
@@ -232,12 +233,12 @@ class DoorDetectionAndPoseNode:
             pre_marker.pose.position.y = float(pre_goal_y)
             pre_marker.pose.position.z = float(pre_goal_z)
             pre_marker.pose.orientation.w = 1.0
-            pre_marker.scale.x = 0.14
-            pre_marker.scale.y = 0.14
-            pre_marker.scale.z = 0.14
             pre_marker.scale.x = 0.30
             pre_marker.scale.y = 0.30
             pre_marker.scale.z = 0.30
+            pre_marker.color.r = 0.1
+            pre_marker.color.g = 0.3
+            pre_marker.color.b = 1.0
             pre_marker.color.a = 1.0
             pre_marker.lifetime = rospy.Duration(0.75)
             marker_array.markers.append(pre_marker)
@@ -449,7 +450,42 @@ class DoorDetectionAndPoseNode:
             cv2.imshow(self.DEPTH_WINDOW, depth_vis)
         cv2.waitKey(1)
     
-    def compute_pose_message(self, detection, rgb_image, depth_final, stamp):
+    def lookup_cam_to_map_tf(self, stamp):
+        """Look up camera_optical->map TF once per frame.
+
+        Tries the image stamp briefly so we use the most accurate transform
+        when TF is in sync. If that times out (TF lagging behind the image),
+        falls back to the latest available transform via rospy.Time(0).
+        Returns the TransformStamped, or None if no TF is available at all.
+        """
+        # Fast attempt at the image stamp
+        if stamp is not None:
+            try:
+                return self.tf_buffer.lookup_transform(
+                    MAP_FRAME, self.camera_frame_id, stamp, rospy.Duration(0.1)
+                )
+            except (tf2_ros.LookupException,
+                    tf2_ros.ExtrapolationException,
+                    tf2_ros.ConnectivityException):
+                pass
+
+        # Fallback: latest available transform (handles persistent TF lag)
+        try:
+            tf_latest = self.tf_buffer.lookup_transform(
+                MAP_FRAME, self.camera_frame_id, rospy.Time(0), rospy.Duration(0.1)
+            )
+            if stamp is not None:
+                lag = (stamp - tf_latest.header.stamp).to_sec()
+                rospy.logwarn_throttle(2.0,
+                    f"cam->map TF lagging image by {lag:.2f}s; using latest TF")
+            return tf_latest
+        except (tf2_ros.LookupException,
+                tf2_ros.ExtrapolationException,
+                tf2_ros.ConnectivityException) as e:
+            rospy.logwarn_throttle(2.0, f"cam->map TF lookup failed: {e}")
+            return None
+
+    def compute_pose_message(self, detection, rgb_image, depth_final, stamp, tf_cam_to_map=None):
         """
         Compute 3D pose from detection and return DoorPose message.
         Uses the SAME rgb_image and depth_image that detection was performed on.
@@ -485,8 +521,11 @@ class DoorDetectionAndPoseNode:
                 rospy.loginfo(f"Skipping pose at {distance:.2f}m (> {self.max_pose_radius_m:.2f}m)")
                 return None
             
-            # Transform to map frame
-            door_pose_map = self.transform_camera_to_map(door_centre_cam, normal_vector_cam, stamp)
+            # Transform to map frame (reuse per-frame TF lookup when provided)
+            door_pose_map = self.transform_camera_to_map(
+                door_centre_cam, normal_vector_cam, stamp,
+                tf_cam_to_map=tf_cam_to_map,
+            )
             
             if door_pose_map is None:
                 rospy.logwarn("Transform to map frame failed")
@@ -513,17 +552,24 @@ class DoorDetectionAndPoseNode:
             traceback.print_exc()
             return None
     
-    def transform_camera_to_map(self, door_centre_cam, door_normal_cam, stamp):
-        """Transform door pose from camera frame to map frame"""
+    def transform_camera_to_map(self, door_centre_cam, door_normal_cam, stamp, tf_cam_to_map=None):
+        """Transform door pose from camera frame to map frame.
+
+        If `tf_cam_to_map` is provided, it is reused (single lookup per frame,
+        shared across all detections). Otherwise we fall back to a direct lookup
+        at the image stamp for backward compatibility.
+        """
         try:
-            # Lookup transform: camera optical frame -> map
-            tf_cam_to_map = self.tf_buffer.lookup_transform(
-                MAP_FRAME, # map
-                self.camera_frame_id, # camera_color_optical_frame
-                stamp,
-                rospy.Duration(1.0)
-            )
-            
+            if tf_cam_to_map is None:
+                # Backward-compatible fallback: lookup at image stamp
+                tf_cam_to_map = self.tf_buffer.lookup_transform(
+                    MAP_FRAME, # map
+                    self.camera_frame_id, # camera_color_optical_frame
+                    stamp,
+                    rospy.Duration(1.0)
+                )
+
+   
             # Transform position
             door_point_cam = PointStamped()
             door_point_cam.header.frame_id = self.camera_frame_id
@@ -589,14 +635,14 @@ class DoorDetectionAndPoseNode:
                     rgb = None if self.latest_rgb_frame is None else self.latest_rgb_frame.copy()
                     depth = None if self.latest_depth_frame is None else self.latest_depth_frame.copy()
                     stamp = self.latest_stamp
-                
+
+                if rgb is None or depth is None or stamp is None:
+                    rate.sleep()
+                    continue
+
                 rospy.logwarn(f"Now: {rospy.Time.now().to_sec():.3f}")
                 rospy.logwarn(f"Image: {stamp.to_sec():.3f}")
                 rospy.logwarn(f"Image age: {(rospy.Time.now() - stamp).to_sec():.3f}s")
-
-                if rgb is None or depth is None:
-                    rate.sleep()
-                    continue
                 
                 t_pose0 = time.time()
                 # YOLO detection on RGB image
@@ -624,7 +670,17 @@ class DoorDetectionAndPoseNode:
                 if len(detections) == 0:
                     rospy.loginfo("No doors detected in this frame")
                     continue
-                
+
+                # Single cam->map TF lookup per frame, shared across all detections.
+                # Falls back to latest available TF if image-stamped TF isn't ready
+                # (handles up to ~seconds of TF lag without blocking).
+                tf_cam_to_map = self.lookup_cam_to_map_tf(stamp)
+                if tf_cam_to_map is None:
+                    rospy.logwarn_throttle(2.0,
+                        "Skipping frame: no cam->map TF available")
+                    rate.sleep()
+                    continue
+
                 door_pose_msgs = []
                 for det in detections:
                     # Publish detection (NOT NEEDED now, as we are publishing poses directly)
@@ -632,7 +688,10 @@ class DoorDetectionAndPoseNode:
                     
                     # Compute 3D pose (do not publish per-door)
                     if det.get('cls_id') in LABEL_DOORS:
-                        pose_msg = self.compute_pose_message(det, rgb, depth_final, stamp)
+                        pose_msg = self.compute_pose_message(
+                            det, rgb, depth_final, stamp,
+                            tf_cam_to_map=tf_cam_to_map,
+                        )
                         if pose_msg is not None:
                             door_pose_msgs.append(pose_msg)
                     

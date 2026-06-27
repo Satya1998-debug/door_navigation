@@ -26,9 +26,9 @@ USE_VLM = True  # set to False to disable VLM and use only geometric reasoning f
 
 # DOOR navigation parameters
 TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
-POST_DOOR_DISTANCE = 1.5  # meters after door
-PRE_DOOR_DISTANCE = 1.2   # meters before door
-DOOR_TRIGGER_DISTANCE = 2.0  # start door logic when closer than this
+POST_DOOR_DISTANCE = 2.0  # meters after door
+PRE_DOOR_DISTANCE = 2.0   # meters before door
+DOOR_TRIGGER_DISTANCE = 4.0  # start door logic when closer than this
 LOOKAHEAD_POINTS = 80  # tune based on plan density
 
 # detector parameters
@@ -90,7 +90,7 @@ SPEAKER_DEVICE_INDEX = 26 # default output device (after pavucontrol volume setu
 MIC_DEVICE_INDEX = 1
 
 # human confirmation behavior in door coordinator
-USE_VOICE_CONFIRMATION = True
-VOICE_CONFIRMATION_TIMEOUT_SEC = 7.0
-VOICE_CONFIRMATION_MAX_TRIES = 2
-HUMAN_CONFIRMATION_COOLDOWN_SEC = 8.0
+USE_VOICE_CONFIRMATION = False
+VOICE_CONFIRMATION_TIMEOUT_SEC = 7.0 # seconds
+VOICE_CONFIRMATION_MAX_TRIES = 2 # max tries for voice confirmation
+HUMAN_CONFIRMATION_COOLDOWN_SEC = 8.0 # seconds

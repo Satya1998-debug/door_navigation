@@ -6,12 +6,24 @@
           args="0 0 0 0 0 0 map camera_link" />
     <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_base_link"
           args="0 0 0 0 0 0 map base_link" /> -->
-    
+
+    <!-- Camera Node -->
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+        <arg name="initial_reset" value="true"/>
+        <arg name="depth_width" value="640"/>
+        <arg name="depth_height" value="480"/>
+        <arg name="depth_fps" value="30"/>
+        <arg name="color_width" value="640"/>
+        <arg name="color_height" value="480"/>
+        <arg name="color_fps" value="30"/>
+        <arg name="align_depth" value="true"/>
+    </include>
+
     <!-- Door Detector & Pose Estimator Node -->
     <node pkg="door_navigation" type="door_detect_pose_estimate_node.py" name="door_detect_pose_estimate_node" output="screen"/>
     
     <!-- Door State Estimator Service -->
-    <!-- <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/> -->
+    <node pkg="door_navigation" type="door_state_estimator_node.py" name="door_state_estimator_service" output="screen"/>
     
     <!-- Door Coordinator Node -->
     <!-- <node pkg="door_navigation" type="door_coordinator_node.py" name="door_coordinator_node" output="screen"/> -->

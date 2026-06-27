@@ -6,6 +6,7 @@ from actionlib_msgs.msg import GoalStatusArray
 import yaml
 import threading
 import os
+import glob
 import math
 import tf2_ros
 
@@ -29,6 +30,8 @@ class GoalManager:
         self.base_frame = BASE_FRAME
 
         self.pub = rospy.Publisher(self.goal_topic, PoseStamped, queue_size=10) # publishes goal
+        # latched current target from the goal manager
+        self.current_target_pub = rospy.Publisher('/goal_manager/current_target', PoseStamped, queue_size=1, latch=True)
         rospy.Subscriber(self.status_topic, GoalStatusArray, self.status_callback) # check goal status
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -59,18 +62,37 @@ class GoalManager:
             self.timer_thread.start()
 
     def _resolve_locations_yaml(self):
-        default_path = '/home/unitree/UnitreeSLAM/catkin_lidar_slam_3d/src/lidar_slam_3d/a2_ros2udp/params/locations.yaml'
+        """Pick the locations YAML to load.
+
+        Priority:
+          1. ROS param ``~locations_yaml`` (explicit override).
+          2. ``saved_locations.yaml`` inside the door_navigation package.
+          3. First matching ``saved_locations*.yaml`` in the package (sorted).
+          4. Legacy hardcoded Unitree path (will fail loudly if missing).
+        """
+        param_path = rospy.get_param('~locations_yaml', '')
+        if param_path:
+            rospy.loginfo("locations_yaml (from ROS param): %s", param_path)
+            return param_path
 
         if rospkg is not None:
             try:
                 pkg_path = rospkg.RosPack().get_path('door_navigation')
-                candidate = os.path.join(pkg_path, 'saved_locations.yaml')
-                if os.path.exists(candidate):
-                    default_path = candidate
-            except Exception:
-                pass
+                preferred = os.path.join(pkg_path, 'saved_locations.yaml')
+                if os.path.exists(preferred):
+                    rospy.loginfo("locations_yaml (package default): %s", preferred)
+                    return preferred
 
-        return rospy.get_param('~locations_yaml', default_path)
+                matches = sorted(glob.glob(os.path.join(pkg_path, 'saved_locations*.yaml')))
+                if matches:
+                    rospy.loginfo("locations_yaml (package fallback, first match): %s",matches[0])
+                    return matches[0]
+            except Exception as e:
+                rospy.logwarn("Failed to resolve locations YAML from package: %s", e)
+
+        default_path = '/home/unitree/UnitreeSLAM/catkin_lidar_slam_3d/src/lidar_slam_3d/a2_ros2udp/params/locations.yaml'
+        rospy.logwarn("locations_yaml falling back to legacy path: %s", default_path)
+        return default_path
 
     def load_locations(self, yaml_file):
         try:
@@ -116,6 +138,11 @@ class GoalManager:
         
         # Publish the goal to the goal topic for the robot navigation
         self.pub.publish(goal)
+        # publish on the latched current-target topic for door coordinator node to use
+        try:
+            self.current_target_pub.publish(goal)
+        except Exception as e:
+            rospy.logwarn("Failed to publish current_target: %s", e)
         rospy.loginfo("Goal sent to {}.".format(location_name))
         self.command_received = True
         self.goal_reached = False  # Reset goal reached status

@@ -137,3 +137,22 @@ def project_to_3d(x1, y1, valid_mask=None, depth=None, intrinsics=None):
     except Exception as e:
         print(f"3D projection failed: {e}")
         return np.array([])
+
+def orientation(a, b, c):
+    """Returns orientation of triplet (a,b,c)"""
+    val = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1])
+    if abs(val) < 1e-9:
+        return 0
+    else:
+        return 1 if val > 0 else 2
+    
+def segments_intersect(p1, p2, q1, q2):
+    """Check if segment p1-p2 intersects q1-q2"""
+    o1 = orientation(p1, p2, q1)
+    o2 = orientation(p1, p2, q2)
+    o3 = orientation(q1, q2, p1)
+    o4 = orientation(q1, q2, p2)
+    if o1 != o2 and o3 != o4:
+        return True
+    else:
+        return False
