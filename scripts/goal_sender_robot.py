@@ -13,7 +13,7 @@ class GoalManager:
         rospy.Subscriber('/move_base/status', GoalStatusArray, self.status_callback)
 
         # Load locations from YAML file
-        self.location_dict = self.load_locations('/home/unitree/UnitreeSLAM/catkin_lidar_slam_3d/src/Go1_nav/a2_ros2udp/params/saved_locations_map_area_04.yaml')
+        self.location_dict = self.load_locations('/home/satya/MT/catkin_ws/src/door_navigation/saved_locations_map_area_04.yaml')
 
         # extract locations from location_dict
         self.locations = self.location_dict["locations"]
@@ -91,7 +91,7 @@ class GoalManager:
         # Main loop to take user input
         while not rospy.is_shutdown():
             try:
-                user_input = raw_input("Enter location name (e.g., 'Office_A'): ")
+                user_input = input("Enter location name (e.g., 'Office_A'): ")
                 self.send_goal(user_input.strip())
             except rospy.ROSInterruptException:
                 break

@@ -35,6 +35,11 @@ chronyc sources -v
 ```
 - the leap status need to be normal
 
+
+- also do this if jetson itself shared internet from some local PC:
+```bash
+sudo ntpdate 192.168.123.148  # use local IP pf thta PC to sync time
+```
 ---
 
 ## 2. Per-Boot Manual Sync (Quick Fix)
