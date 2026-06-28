@@ -20,6 +20,9 @@ GOAL_TOPIC = '/goal'
 GOAL_STATUS_TOPIC = '/move_base/status'
 BASE_FRAME = 'base_link'
 POSITION_TOLERANCE = 0.35  # meters
+# Short startup wait so the publisher has a chance to register with subscribers
+# (mainly relevant for one-shot CLI invocations; harmless for long-running nodes).
+GOAL_PUB_STARTUP_WAIT_SEC = 0.5
 
 class GoalManager:
     def __init__(self, init_node=True, enable_inactivity_thread=True, locations_yaml_path=None):
@@ -35,6 +38,16 @@ class GoalManager:
         self.current_target_pub = rospy.Publisher('/goal_manager/current_target', PoseStamped, queue_size=1, latch=True)
         rospy.Subscriber(self.status_topic, GoalStatusArray, self.status_callback) # check goal status
 
+        # Give the publisher a moment to register with subscribers (e.g. move_base).
+        # Without this, a one-shot CLI invocation can race the first publish and
+        # drop the message. For long-running consumers (robot_command_bridge) this
+        # is just a small startup delay.
+        startup_deadline = rospy.Time.now() + rospy.Duration(GOAL_PUB_STARTUP_WAIT_SEC)
+        while (self.pub.get_num_connections() == 0
+               and not rospy.is_shutdown()
+               and rospy.Time.now() < startup_deadline):
+            rospy.sleep(0.05)
+
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
@@ -44,11 +57,11 @@ class GoalManager:
         # Load locations from YAML file
         self.locations = self.load_locations(self._resolve_locations_yaml())
 
-        # Define home location
-        self.home_location_name = rospy.get_param('~home_location', 'Home')
+        # Define home location (YAML key is lowercase 'home' in our saved_locations files).
+        self.home_location_name = rospy.get_param('~home_location', 'home')
         self.home_location = self.locations.get(self.home_location_name)
         if not self.home_location:
-            rospy.logwarn("Home location is not defined in the locations file.")
+            rospy.logwarn("Home location '%s' is not defined in the locations file.", self.home_location_name)
 
         # Set initial variables
         self.last_command_time = rospy.get_time()
@@ -128,10 +141,13 @@ class GoalManager:
             return False, msg
 
         location = self.locations[location_name] # get pose from locations yaml
-        # formulate PoseStamped message from the location data
+        # Build PoseStamped message from location data.
+        # NOTE: header.stamp is intentionally left unset (Time(0)) to match the
+        # working goal_sender_robot.py behavior. move_base accepts goals with an
+        # empty stamp on move_base_simple/goal, and setting Time.now() has been
+        # observed to cause issues here.
         try:
             goal = PoseStamped()
-            goal.header.stamp = rospy.Time.now()
             goal.header.frame_id = location['header']['frame_id']
             goal.pose.position.x = location['pose']['position']['x']
             goal.pose.position.y = location['pose']['position']['y']
@@ -144,14 +160,16 @@ class GoalManager:
             msg = "Invalid location pose for '{}': {}".format(location_name, e)
             rospy.logerr(msg)
             return False, msg
-        
-        # Publish the goal to the goal topic for the robot navigation
+
+        # Single publish to match the working goal_sender_robot.py behavior.
         self.pub.publish(goal)
-        # publish on the latched current-target topic for door coordinator node to use
+
+        # Latched current-target topic for the door coordinator node to consume.
         try:
             self.current_target_pub.publish(goal)
         except Exception as e:
             rospy.logwarn("Failed to publish current_target: %s", e)
+
         rospy.loginfo("Goal sent to {}.".format(location_name))
         self.command_received = True
         self.goal_reached = False  # Reset goal reached status
@@ -326,6 +344,9 @@ if __name__ == "__main__":
             rospy.logerr("Failed to send goal: %s", reason)
             raise SystemExit(1)
 
+        # Keep process alive briefly so ROS transport can flush the goal message
+        # (single publish, so we want a comfortable margin before exiting).
+        rospy.sleep(0.5)
         rospy.loginfo("Goal accepted: %s", reason)
         rospy.loginfo("Use `rostopic echo /move_base/status` to monitor progress.")
     except rospy.ROSInterruptException:
