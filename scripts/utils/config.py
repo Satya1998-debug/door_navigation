@@ -26,9 +26,15 @@ USE_VLM = True  # set to False to disable VLM and use only geometric reasoning f
 
 # DOOR navigation parameters
 TEB_GLOBAL_PLAN_TOPIC = "/move_base/TebLocalPlannerROS/global_plan"
-POST_DOOR_DISTANCE = 2.0  # meters after door
+POST_DOOR_DISTANCE = 2.0  # meters after door (only used when USE_POST_DOOR_POSE=True)
 PRE_DOOR_DISTANCE = 2.0   # meters before door
 DOOR_TRIGGER_DISTANCE = 6.0  # start door logic when closer than this
+# When True, coordinator commands a short "just past the door" checkpoint
+# before resuming the original goal. Gives cleaner failure isolation and a
+# straighter TEB path through tight door frames, at the cost of a brief stop.
+# When False, coordinator sends the saved original goal directly at the
+# "door is passable" branch and treats reaching it as full door traversal.
+USE_POST_DOOR_POSE = True
 # Arc-length safety margin added on top of DOOR_TRIGGER_DISTANCE when scanning
 # the global plan for door intersections. Lookahead = trigger + this margin.
 LOOKAHEAD_SAFETY_MARGIN_M = 1.0  # meters
@@ -95,8 +101,11 @@ SPEAKER_DEVICE_INDEX = 1 # default output device (after pavucontrol volume setup
 MIC_DEVICE_INDEX = 0
 
 # human confirmation behavior in door coordinator
-USE_VOICE_ASSISTANT = False  # when False, _speak() will log instead of speaking, and voice assistant is not initialized
-USE_VOICE_CONFIRMATION = False
+USE_VOICE_ASSISTANT = True  # when False, _speak() will log instead of speaking, and voice assistant is not initialized
+USE_VOICE_CONFIRMATION = True
 VOICE_CONFIRMATION_TIMEOUT_SEC = 7.0 # seconds
 VOICE_CONFIRMATION_MAX_TRIES = 2 # max tries for voice confirmation
 HUMAN_CONFIRMATION_COOLDOWN_SEC = 8.0 # seconds
+# Give up on the door after this many unsuccessful confirmation cycles so the
+# coordinator can never get stuck indefinitely at a closed door.
+MAX_HUMAN_CONFIRMATION_CYCLES = 6

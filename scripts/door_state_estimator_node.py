@@ -49,7 +49,7 @@ POSE_PUB_QSIZE = 1
 RGB_SUB_QSIZE = 1
 DEPTH_SUB_QSIZE = 1
 
-WAIT_BEFORE_ESTIMATE = 2.0 # secs waited after reaching pre-goal and before running state estimation
+WAIT_BEFORE_ESTIMATE = 1.0 # secs waited after reaching pre-goal and before running state estimation
 
 
 class DoorStateEstimatorService:
@@ -167,6 +167,16 @@ class DoorStateEstimatorService:
                 rospy.logwarn(response.error_message)
                 return response
 
+            # Camera intrinsics must be available before we project any depth
+            # into 3D. Without a guard, downstream code raises AttributeError.
+            if not self.camera_info_received:
+                response.door_state = "unknown"
+                response.is_passable = False
+                response.error_message = "Camera intrinsics not yet received"
+                response.success = False
+                rospy.logwarn(response.error_message)
+                return response
+
             # Ensure depth is 2D for downstream processing
             if len(depth_img.shape) == 3:
                 depth_img = depth_img[:, :, 0]
@@ -191,9 +201,10 @@ class DoorStateEstimatorService:
             
             door_state = result.get("door_state", "unknown")
             response.door_state = door_state
-            response.conversation = result.get("conversation", "NA")
-            response.is_passable = result.get("is_passable", False)
+            response.conversation = result.get("conversation", "") or ""
+            response.is_passable = bool(result.get("is_passable", False))
             response.error_message = ""
+            response.success = True
             t1 = time.time()
             rospy.loginfo(f"Door state: {door_state}, passable: {response.is_passable}")
             rospy.loginfo(f"Door State Estimation TOTAL TIME: {t1 - t0:.3f}s")

@@ -42,6 +42,13 @@ from door_pose_estimator_utils import get_post_door_pose, get_pre_door_pose
 from voice_assistant import get_voice_assistant
 
 
+# Whole-word vocab for voice/keyboard confirmation. Kept as tuples so we
+# can match on tokens instead of substrings (avoids "unsure"→"sure",
+# "stopping"→"stop", "yesterday"→"yes", "spoke"→"ok" false positives).
+_YES_TOKENS = ("yes", "yeah", "yep", "yup", "okay", "ok", "sure", "correct", "confirm", "confirmed", "affirmative", "proceed")
+_YES_BIGRAMS = (("go", "ahead"), ("sounds", "good"), ("all", "good"), ("looks", "good"), ("safe", "to"), ("i", "confirm"))
+_NO_TOKENS = ("no", "nope", "nah", "stop", "wait", "hold", "unsafe", "cancel", "abort", "negative", "don't", "dont", "not")
+
 class DoorState(Enum):
     NAVIGATING = 0
     APPROACHING_DOOR = 1
@@ -68,16 +75,13 @@ class DoorCoordinator:
     def __init__(self):
         rospy.init_node("door_coordinator")
 
-        # Set up dedicated debug log file BEFORE anything else so every
-        # subsequent rospy.loginfo/logwarn/logerr from this node lands in it.
         self._debug_log_path = None
-        self._setup_debug_log_file()
+        self._setup_debug_log_file() # setup debug log file
 
         self.pre_door_distance = PRE_DOOR_DISTANCE
         self.post_door_distance = POST_DOOR_DISTANCE
-        # Auto-scaled lookahead: scan the global plan up to this many meters
-        # of arc length ahead of the robot's closest path point. Grows
-        # automatically whenever DOOR_TRIGGER_DISTANCE is increased.
+
+        # automatically tuned lookahead distance
         self.lookahead_distance_m = float(DOOR_TRIGGER_DISTANCE) + float(LOOKAHEAD_SAFETY_MARGIN_M)
         
         self.state = DoorState.NAVIGATING # default 0: NAVIGATING
@@ -90,7 +94,10 @@ class DoorCoordinator:
         self.voice_confirmation_timeout_sec = VOICE_CONFIRMATION_TIMEOUT_SEC
         self.voice_confirmation_max_tries = VOICE_CONFIRMATION_MAX_TRIES
         self.human_confirmation_cooldown_sec = HUMAN_CONFIRMATION_COOLDOWN_SEC
+        self.max_human_confirmation_cycles = MAX_HUMAN_CONFIRMATION_CYCLES
         self.last_human_confirmation_prompt_ts = 0.0
+        # consecutive human confirmation cycles where the human neither approved nor answered clearly
+        self._human_confirmation_cycles = 0
         self.last_state_service_call_ts = 0.0  # cooldown for VLM service in AT_PRE_DOOR
 
         # visualization of door poses
@@ -111,18 +118,14 @@ class DoorCoordinator:
 
         self._last_handling_published = False # initial its false, as no door yet handled
 
-        # Failure channel: latched String. Empty when healthy; populated with a
-        # reason once the coordinator transitions to DoorState.FAILED. External
-        # monitors can `rostopic echo` this to know why the robot stopped.
+        # publishes the failure reason when the coordinator transitions to DoorState.FAILED
         self.failure_pub = rospy.Publisher("/door_coordinator/failure_reason", String, queue_size=1, latch=True)
         try:
             self.failure_pub.publish(String(data=""))
         except Exception as e:
             rospy.logwarn("Failed to publish initial failure_reason: %s", e)
 
-        # DEBUG / OBSERVABILITY (read-only; does not affect coordinator flow)
-        # `door_on_path` latched bool + reason string, useful for `rostopic echo`
-        # and for understanding why the coordinator stays in NAVIGATING.
+        # publishes the door_on_path bool and reason string, useful for debugging and for understanding why the coordinator stays in NAVIGATING
         self.door_on_path_pub = rospy.Publisher("/door_coordinator/door_on_path", Bool, queue_size=1, latch=True)
         self.door_on_path_reason_pub = rospy.Publisher("/door_coordinator/door_on_path_reason", String, queue_size=1, latch=True)
         self._last_door_on_path = None
@@ -191,16 +194,21 @@ class DoorCoordinator:
 
         If the voice assistant is disabled or unavailable, log the message
         instead so coordinator flow and observability are preserved.
+        Silently drops empty / placeholder strings (e.g. "NA") so the TTS
+        engine never mispronounces field-defaults from downstream services.
         """
         if not text:
             return
+        stripped = str(text).strip()
+        if not stripped or stripped.upper() in ("NA", "N/A", "NONE", "NULL"):
+            return
         if self.voice_assistant is None:
-            rospy.loginfo(f"[SPEAK] {text}")
+            rospy.loginfo(f"[SPEAK] {stripped}")
             return
         try:
-            self.voice_assistant.speak(text)
+            self.voice_assistant.speak(stripped)
         except Exception as e:
-            rospy.logwarn(f"Speech output failed: {e}; falling back to log: [SPEAK] {text}")
+            rospy.logwarn(f"Speech output failed: {e}; falling back to log: [SPEAK] {stripped}")
 
     def _setup_debug_log_file(self):
         """Mirror this node's rospy log calls to a dedicated debug file.
@@ -361,37 +369,82 @@ class DoorCoordinator:
     def _external_target_callback(self, msg):
         """Cache the latest high-level goal published by the goal manager."""
         self.external_target_goal = msg
-    
+
+    def _classify_confirmation(self, text):
+        """Return 'yes', 'no' or 'unknown' for a transcribed confirmation string.
+
+        Rules (safety-biased):
+          * tokenize on non-alphabetic characters so we match whole words only,
+          * any explicit negation token → 'no',
+          * negation-of-yes bigrams ("not sure", "don't proceed", ...) → 'no',
+          * any yes-token or yes-bigram → 'yes',
+          * anything else (silence, gibberish, unrelated words) → 'unknown'.
+        Negatives are checked before positives on purpose: if both are heard
+        in the same utterance we err on the side of NOT driving through.
+        """
+        if not text:
+            return "unknown"
+        
+        # normalize + tokenize (letters + apostrophe so "don't" survives)
+        norm = "".join(c.lower() if (c.isalpha() or c == "'") else " " for c in str(text))
+        tokens = [t for t in norm.split() if t]
+        if not tokens:
+            return "unknown"
+        token_set = set(tokens)
+        bigrams = set(zip(tokens, tokens[1:]))
+
+        # explicit negations
+        if token_set & set(self._NO_TOKENS):
+            return "no"
+        # negated positive ("not sure", "don't proceed", ...)
+        for prev, cur in bigrams:
+            if prev in ("not", "don't", "dont", "no") and cur in self._YES_TOKENS:
+                return "no"
+        # explicit positives
+        if token_set & set(self._YES_TOKENS):
+            return "yes"
+        if bigrams & set(self._YES_BIGRAMS):
+            return "yes"
+        return "unknown"
+
     def interact_with_human(self, conversation):
-        # operates in blocking mode
+        """Block briefly waiting for a human yes/no. Noise-safe classifier.
+
+        Returns True only on an explicit YES. Any explicit NO or ambiguous /
+        unrecognized response returns False; the caller then decides whether
+        to re-prompt (after VLM service cooldown) or give up (max cycle guard).
+        """
         try:
-            # SPEAK
             rospy.loginfo(f"Interacting with human: {conversation}")
 
             if self.use_voice_confirmation and self.voice_assistant is not None:
                 prompt = "Is the door safe to traverse? Please say yes or no."
                 self._speak(prompt)
                 for attempt in range(self.voice_confirmation_max_tries):
-                    feedback = self.voice_assistant.get_voice_input(timeout_sec=self.voice_confirmation_timeout_sec)
+                    feedback = self.voice_assistant.get_voice_input(
+                        timeout_sec=self.voice_confirmation_timeout_sec)
                     if not feedback:
-                        rospy.loginfo(f"No voice confirmation captured (attempt {attempt + 1}/{self.voice_confirmation_max_tries})")
+                        rospy.loginfo(
+                            f"No voice confirmation captured "
+                            f"(attempt {attempt + 1}/{self.voice_confirmation_max_tries})")
                         continue
-
-                    fb = feedback.lower()
-                    rospy.loginfo(f"Human voice confirmation: {fb}")
-                    if any(word in fb for word in ["yes", "sure", "go ahead", "okay", "ok"]):
+                    verdict = self._classify_confirmation(feedback)
+                    rospy.loginfo(
+                        f"Human voice confirmation heard='{feedback}' verdict={verdict}")
+                    if verdict == "yes":
                         rospy.loginfo(f"Human confirmation received: {conversation}")
                         return True
-                    if any(word in fb for word in ["no", "wait", "stop", "not safe"]):
+                    if verdict == "no":
                         return False
-            
+                    # 'unknown' means the human did not answer clearly, so ask again by continuing the loop; if this was
+                    # the last attempt, fall through and return False (max cycle reached)
+                return False
+
             else:
                 rospy.loginfo("Voice confirmation unavailable, falling back to keyboard input")
-                # ASK FOR FEEDBACK
                 feedback = input("Is the door safe to traverse? (yes/no): ")
-                
-                # Check FEEDBACK
-                if "yes" in feedback.lower() or "sure" in feedback.lower() or "go ahead" in feedback.lower():
+                verdict = self._classify_confirmation(feedback)
+                if verdict == "yes":
                     rospy.loginfo(f"Human confirmation received: {conversation}")
                     return True
                 return False
@@ -477,18 +530,18 @@ class DoorCoordinator:
         rx = robot_pose_map.pose.position.x
         ry = robot_pose_map.pose.position.y
 
-        # only consider doors within the configured trigger radius
+        # only consider doors within the configured trigger radius (DOOR_TRIGGER_DISTANCE)
         if math.hypot(xd - rx, yd - ry) > DOOR_TRIGGER_DISTANCE:
             return False
 
-        # Vertical-normal sanity: a real door has a mostly-horizontal normal.
-        # When perception misfires on floor/ceiling/glass the normal points
+        # vertical-normal sanity: a real door has a mostly-horizontal normal.
+        # when perception misfires on floor/ceiling/glass the normal points
         # sharply up/down and the 2D projection of the door span becomes garbage.
         normal = door_pose_map.get("normal", [0.0, 0.0, 0.0])
-        if abs(float(normal[2])) > 0.5: # if the y-component of the normal is greater than 0.5, then skip
+        if abs(float(normal[2])) > 0.5: # if the y-component of the normal is greater than 0.5, then skip, meaning the door is not vertical
             return False
 
-        # Door span calculation (projected onto map ground plane)
+        # door span calculation (projected onto map ground plane)
         nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
         door_yaw_map = math.atan2(ny, nx)
         door_width = float(door_pose_map.get("width", 0.9) or 0.9)
@@ -517,9 +570,9 @@ class DoorCoordinator:
         # index of the closest point on the path to the robot
         closest_i = min(range(len(path)), key=lambda i: (path[i].pose.position.x - rx)**2 + (path[i].pose.position.y - ry)**2)
         
-        # Arc-length-based forward window so lookahead auto-scales with
-        # DOOR_TRIGGER_DISTANCE instead of relying on TEB sampling density.
-        end_i, _arc = self._compute_lookahead_end_index(path, closest_i)
+        # arc-length-based forward window so lookahead auto-scales with
+        # DOOR_TRIGGER_DISTANCE instead of relying on TEB sampling density
+        end_i, _arc = self._compute_lookahead_end_index(path, closest_i) # returns the index of the last valid point on the path and the arc length
         
         for i in range(closest_i, end_i):
             ax = path[i].pose.position.x
@@ -614,23 +667,25 @@ class DoorCoordinator:
 
         rospy.loginfo("Triggering pre-door pose")
         self._speak("Door detected on path. Moving to pre-door position.")
+
+        # fresh door encounter, reset confirmation retry counter so a new door starts with the full budget
+        self._human_confirmation_cycles = 0
         pre_goal = self.compute_pre_door_goal()
         if pre_goal:
             self.send_goal(pre_goal)
             self.state = DoorState.APPROACHING_DOOR
     
     def perfrom_door_state_check(self):
-        # If the VLM service is unavailable, don't deadlock at AT_PRE_DOOR.
-        # Best-effort: try to traverse; if the door is closed, move_base will
-        # fail to reach the post-door pose and the TRAVERSING failure handler
-        # will gracefully resume the original goal.
+        # if the VLM service is unavailable, don't deadlock at AT_PRE_DOOR,
+        # best-effort: try to traverse; if the door is closed, move_base will
+        # fail to reach the post-door pose and the TRAVERSING failure handler will gracefully resume the original goal
         if self.door_state_service is None:
             rospy.logwarn_throttle(10.0, "Door state service unavailable; skipping check and attempting traversal")
             self._speak("Door state check skipped. Attempting to traverse.")
             self.send_post_door_goal()
             return
 
-        # Cooldown: don't hit the VLM at 10 Hz while waiting in AT_PRE_DOOR.
+        # don't hit the VLM at 10 Hz while waiting in AT_PRE_DOOR (cooldown)
         now_ts = time.monotonic()
         if now_ts - self.last_state_service_call_ts < STATE_SERVICE_COOLDOWN_SEC:
             return
@@ -649,26 +704,36 @@ class DoorCoordinator:
                     rospy.loginfo("Door is passable, proceeding through")
                     self._speak("Door is open and safe. Proceeding through the door.")
                     self.last_human_confirmation_prompt_ts = 0.0
+                    self._human_confirmation_cycles = 0
                     self.send_post_door_goal()
                     return
                 else:
-                    # Human feedback, ask to open the door if not open # TODO
+                    # Human feedback: ask to open the door if not open
                     now_ts = time.monotonic()
                     if now_ts - self.last_human_confirmation_prompt_ts < self.human_confirmation_cooldown_sec:
                         return
                     self.last_human_confirmation_prompt_ts = now_ts
+                    self._human_confirmation_cycles += 1
+                    rospy.loginfo(
+                        f"Human confirmation cycle "
+                        f"{self._human_confirmation_cycles}/{self.max_human_confirmation_cycles}")
 
                     self._speak("Door is not ready to pass. Waiting for human confirmation.")
-                    approved = self.interact_with_human(response.conversation) # TODO: can pass conversation snippet from state estimator to use in human interaction
-                        
-                    # if YES, perform state eastimation again then proceed
+                    approved = self.interact_with_human(response.conversation)
+
                     if approved:
-                        # response = self.door_state_service() # Dont scan 2nd time just traverse
-                        # SPEAK that robot is proceeding through the door
                         rospy.loginfo("Human confirmed door is safe to traverse")
                         self._speak("Human confirmed. Proceeding through the door.")
                         self.last_human_confirmation_prompt_ts = 0.0
+                        self._human_confirmation_cycles = 0
                         self.send_post_door_goal()
+                        return
+
+                    # not approved this cycle or no human confirm, give up after max retries
+                    if self._human_confirmation_cycles >= self.max_human_confirmation_cycles:
+                        self._speak("I could not get a confirmation to proceed. Stopping and giving up on this door.")
+                        self._human_confirmation_cycles = 0
+                        self._fail("no human confirmation after retries")
                         return
                             
             except rospy.ServiceException as e:
@@ -703,7 +768,7 @@ class DoorCoordinator:
         rospy.logerr("Door coordination FAILED: %s", reason)
         self._speak(f"Navigation failed. {reason}. Stopping.")
 
-        # Stop chasing the doomed goal so the robot actually halts.
+        # cancel all goals so the robot actually halts
         try:
             self.move_base_client.cancel_all_goals()
         except Exception as e:
@@ -712,7 +777,7 @@ class DoorCoordinator:
         self.current_door_pose_map = None
         self.original_goal = None
 
-        try:
+        try: # publish failure reason to the failure_reason topic
             self.failure_pub.publish(String(data=reason))
         except Exception as e:
             rospy.logwarn("Failed to publish failure_reason: %s", e)
@@ -735,21 +800,55 @@ class DoorCoordinator:
         # otherwise still APPROACHING_DOOR (PENDING/ACTIVE) — keep waiting
         
     def send_post_door_goal(self):
-        rospy.loginfo("Sending post-door goal")
-        self._speak("Navigating through the doorway.")
-        post_goal = self.compute_post_door_goal()
-        if post_goal:
-            self.send_goal(post_goal)
-            self.state = DoorState.TRAVERSING
+        """Drive the robot through the doorway.
+
+        Behavior is controlled by ``USE_POST_DOOR_POSE`` in config:
+
+        * ``True`` (default): send a short "just past the door" checkpoint
+          along ``-normal`` at ``POST_DOOR_DISTANCE``. When move_base reports
+          SUCCEEDED on that goal we know the door was cleared, and
+          ``_resume_original_goal`` takes over.
+        * ``False``: send the saved ``self.original_goal`` directly so the
+          robot crosses the door and continues to the final destination
+          without a decel/stop/accel checkpoint. Reaching the original goal
+          counts as full door traversal.
+
+        In either case the state transitions to ``TRAVERSING`` and the
+        ``spin()`` loop reacts to move_base's terminal status.
+        """
+        if USE_POST_DOOR_POSE:
+            rospy.loginfo("Sending post-door goal")
+            self._speak("Navigating through the doorway.")
+            post_goal = self.compute_post_door_goal()
+            if post_goal:
+                self.send_goal(post_goal)
+                self.state = DoorState.TRAVERSING
+            return
+
+        # USE_POST_DOOR_POSE=False: directly resume to the original goal
+        if self.original_goal is None:
+            # No saved goal to resume to — fall back to a short post-door hop
+            # so the robot at least clears the frame instead of stopping in it.
+            rospy.logwarn("USE_POST_DOOR_POSE=False but no original_goal cached; falling back to post-door checkpoint for a safe crossing.")
+            self._speak("Navigating through the doorway.")
+            post_goal = self.compute_post_door_goal()
+            if post_goal:
+                self.send_goal(post_goal)
+                self.state = DoorState.TRAVERSING
+            return
+
+        rospy.loginfo("Sending original goal directly (USE_POST_DOOR_POSE=False)")
+        self._speak("Door is clear. Resuming navigation to goal.")
+        self.send_goal(self.original_goal)
+        # consume the saved goal so TRAVERSING SUCCEEDED routes through
+        # _resume_original_goal without re-sending it
+        self.original_goal = None
+        self.state = DoorState.TRAVERSING
     
     def _compute_lookahead_end_index(self, path, closest_i):
-        """Walk forward from ``closest_i`` until arc length covers
-        ``self.lookahead_distance_m`` OR we hit the ``LOOKAHEAD_POINTS``
-        safety cap. Returns ``(end_i, arc_length_m)``.
-
-        ``end_i`` is the last valid index for ``path[end_i+1]`` so the
-        intersection loop can iterate ``range(closest_i, end_i)`` safely.
-        """
+        """Walk forward from closest_i until arc length covers lookahead_distance_m OR we hit the LOOKAHEAD_POINTS safety cap.
+        Returns (end_i, arc_length_m). end_i is the last valid index for path[end_i+1], 
+        so the intersection loop can iterate range(closest_i, end_i) safely.""" 
         n = len(path)
         if n <= 1 or closest_i >= n - 1:
             return closest_i, 0.0
@@ -771,17 +870,19 @@ class DoorCoordinator:
     def _evaluate_door_on_path_reason(self):
         """Read-only diagnostic of door-on-path with a reason string.
 
-        Mirrors the gating checks in :meth:`is_door_on_path` and
-        :meth:`check_door_intersects_path` but never mutates coordinator
-        state. Returns ``(bool, str)``; intended only for observability.
+        Similar to `is_door_on_path` method and `check_door_intersects_path` but never interferes with coordinator state.
+        Returns (bool, str); intended only for observability.
         """
+        # missing plan and door poses
         if self.current_plan is None and len(self.latest_door_poses) == 0:
             return False, "missing_plan_and_door_poses"
+        # missing global plan
         if self.current_plan is None:
             return False, "missing_global_plan"
         if len(self.latest_door_poses) == 0:
             return False, "missing_door_poses"
 
+        # plan frame mismatch
         plan_frame = (self.current_plan.header.frame_id or "").strip()
         if plan_frame and plan_frame != MAP_FRAME:
             return False, f"plan_frame_mismatch:{plan_frame}"
@@ -796,6 +897,7 @@ class DoorCoordinator:
         rx = robot_pose.pose.position.x
         ry = robot_pose.pose.position.y
 
+        # only consider door poses that are fresh
         fresh = []
         for dp in self.latest_door_poses:
             ts = dp.get("timestamp")
@@ -829,9 +931,9 @@ class DoorCoordinator:
             door_width = max(0.5, min(door_width, 1.6))
             proj_scale = math.sqrt(max(0.0, 1.0 - nz * nz))
             span_yaw = door_yaw + math.pi / 2.0
-            half_w = (door_width * proj_scale) / 2.0 + INTERSECT_SPAN_MARGIN_M
-            d_p1 = (xd + half_w * math.cos(span_yaw), yd + half_w * math.sin(span_yaw))
-            d_p2 = (xd - half_w * math.cos(span_yaw), yd - half_w * math.sin(span_yaw))
+            half_w = (door_width * proj_scale) / 2.0 + INTERSECT_SPAN_MARGIN_M # half width of the door in the path frame
+            d_p1 = (xd + half_w * math.cos(span_yaw), yd + half_w * math.sin(span_yaw)) # door center in the path frame
+            d_p2 = (xd - half_w * math.cos(span_yaw), yd - half_w * math.sin(span_yaw)) # door center in the path frame
 
             path = self.current_plan.poses
             closest_i = min(
@@ -938,14 +1040,26 @@ class DoorCoordinator:
             elif self.state == DoorState.TRAVERSING: # 3: TRAVERSING
                 mb_state = self.move_base_client.get_state()
                 if mb_state == actionlib.GoalStatus.SUCCEEDED:
-                    # Success: robot actually crossed the door, continue navigation.
-                    rospy.loginfo("Door traversal complete, resuming original goal")
-                    self._speak("Door traversal complete. Resuming original goal.")
-                    self._resume_original_goal()
+                    if USE_POST_DOOR_POSE:
+                        # post-door checkpoint reached. Now send the saved
+                        # original goal to continue navigation.
+                        rospy.loginfo("Door traversal complete, resuming original goal")
+                        self._speak("Door traversal complete. Resuming original goal.")
+                        self._resume_original_goal()
+                    else:
+                        # direct-mode: SUCCEEDED means we reached the original
+                        # goal (post-door step was skipped). Drop back to
+                        # NAVIGATING without re-sending anything.
+                        rospy.loginfo("Reached original goal (direct-through-door mode)")
+                        self._speak("Reached the goal.")
+                        self.current_door_pose_map = None
+                        self.original_goal = None
+                        self.state = DoorState.NAVIGATING
                 elif mb_state in self._MB_FAILURE_STATES:
-                    # Failure during traversal: the door is the blocker. Don't
-                    # try to plan around it — halt and surface the failure.
-                    self._fail(reason=f"post-door goal failed (move_base state={mb_state})")
+                    # failure during traversal: halt and surface it. The exact
+                    # goal that failed depends on USE_POST_DOOR_POSE.
+                    which = "post-door" if USE_POST_DOOR_POSE else "original"
+                    self._fail(reason=f"{which} goal failed (move_base state={mb_state})")
             rate.sleep()
 
         if self.voice_assistant is not None:

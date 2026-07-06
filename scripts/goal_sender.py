@@ -4,6 +4,7 @@ import argparse
 import rospy
 from geometry_msgs.msg import PoseStamped
 from actionlib_msgs.msg import GoalStatusArray
+from std_msgs.msg import String
 import yaml
 import threading
 import os
@@ -18,11 +19,17 @@ except Exception:
     
 GOAL_TOPIC = '/goal'
 GOAL_STATUS_TOPIC = '/move_base/status'
+DOOR_FAILURE_TOPIC = '/door_coordinator/failure_reason'
 BASE_FRAME = 'base_link'
 POSITION_TOLERANCE = 0.35  # meters
 # Short startup wait so the publisher has a chance to register with subscribers
 # (mainly relevant for one-shot CLI invocations; harmless for long-running nodes).
 GOAL_PUB_STARTUP_WAIT_SEC = 0.5
+# How long move_base status must sit at PREEMPTED (2) without a new ACTIVE
+# goal before we conclude nothing is running and treat it as a hard failure.
+# Chosen large enough to absorb the brief PREEMPTED window that appears while
+# the door coordinator swaps between pre-door / post-door / original goals.
+PREEMPTED_FAILURE_HOLD_SEC = 3.0
 
 class GoalManager:
     def __init__(self, init_node=True, enable_inactivity_thread=True, locations_yaml_path=None):
@@ -37,6 +44,13 @@ class GoalManager:
         # latched current target from the goal manager
         self.current_target_pub = rospy.Publisher('/goal_manager/current_target', PoseStamped, queue_size=1, latch=True)
         rospy.Subscriber(self.status_topic, GoalStatusArray, self.status_callback) # check goal status
+
+        # Track door-coordinator terminal failures so an in-flight
+        # wait_for_target_reached call can exit with the real reason instead
+        # of stalling until the timeout.
+        self.door_failure_reason = ""
+        self.door_failure_stamp = None
+        rospy.Subscriber(DOOR_FAILURE_TOPIC, String, self._door_failure_callback, queue_size=1)
 
         # Give the publisher a moment to register with subscribers (e.g. move_base).
         # Without this, a one-shot CLI invocation can race the first publish and
@@ -71,6 +85,10 @@ class GoalManager:
         self.latest_status = None
         self.latest_status_text = ""
         self.current_target_goal = None
+        # Tracks the wall-clock time at which move_base status *first* became
+        # PREEMPTED (2) without transitioning back to ACTIVE. Used together
+        # with PREEMPTED_FAILURE_HOLD_SEC to detect an abandoned goal.
+        self._preempted_since = None
 
         self.timer_thread = None
         if enable_inactivity_thread:
@@ -176,6 +194,11 @@ class GoalManager:
         self.goal_reached_logged = False
         self.latest_status = None
         self.latest_status_text = ""
+        # Clear stale failure/PREEMPTED trackers so a previous run's terminal
+        # state can't immediately fail this new wait.
+        self._preempted_since = None
+        self.door_failure_reason = ""
+        self.door_failure_stamp = None
         self.current_target_goal = goal
         self.last_command_time = rospy.get_time()
         # this returns True when the send is success, not that it reached goal
@@ -203,12 +226,16 @@ class GoalManager:
                                 enable_status_check=False, enable_timeout=True):
         """Block until robot reaches target by distance, or timeout. This for the FINAL GOAL of the navigation.
 
-        If use_status_failures is True, terminal move_base failures are also treated as failure.
-        If require_status_success is True, arrival requires BOTH distance and status=SUCCEEDED.
+        If use_status_failures is True, terminal move_base failures are also treated as failure. This also
+        catches two extra "no one is driving anymore" conditions:
+          * ``/door_coordinator/failure_reason`` becoming non-empty *after* this
+            call started (door coordinator gave up on a door).
+          * move_base status sitting at PREEMPTED (2) for
+            ``PREEMPTED_FAILURE_HOLD_SEC`` without a fresh ACTIVE goal.
         """
-        if enable_timeout: # this will check if the navigation takes longer than the timeout and return failure if it does
-            deadline = rospy.Time.now() + rospy.Duration(float(timeout_sec))
-        
+        wait_start = rospy.Time.now()
+        deadline = wait_start + rospy.Duration(float(timeout_sec)) if enable_timeout else None
+
         rate = rospy.Rate(5)
         while not rospy.is_shutdown():
             dist = self._distance_to_current_target()
@@ -222,10 +249,25 @@ class GoalManager:
                 if dist_reached:
                     return True, "arrived"
 
-            # Optional hard failures from move_base status stream.
-            if use_status_failures and self.latest_status in [4, 5, 8, 9]:
-                text = self.latest_status_text or "navigation failed"
-                return False, "move_base_failed:{}".format(text)
+            if use_status_failures:
+                # Explicit terminal failures from move_base.
+                if self.latest_status in [4, 5, 8, 9]:
+                    text = self.latest_status_text or "navigation failed"
+                    return False, "move_base_failed:{}".format(text)
+
+                # Door coordinator terminal failure that happened *during* this
+                # wait (ignore any stale latched value from before we started).
+                if (self.door_failure_reason
+                        and self.door_failure_stamp is not None
+                        and self.door_failure_stamp >= wait_start):
+                    return False, "door_coordinator_failed:{}".format(self.door_failure_reason)
+
+                # move_base has been stuck at PREEMPTED with no fresh ACTIVE
+                # goal for too long → nobody's driving.
+                if (self._preempted_since is not None
+                        and (rospy.Time.now() - self._preempted_since).to_sec()
+                            >= PREEMPTED_FAILURE_HOLD_SEC):
+                    return False, "move_base_preempted_no_active_goal"
 
             if enable_timeout and rospy.Time.now() >= deadline:
                 return False, "navigation_timeout_after_{}s".format(int(timeout_sec))
@@ -233,6 +275,25 @@ class GoalManager:
             rate.sleep()
 
         return False, "ros_shutdown"
+
+    def _door_failure_callback(self, msg):
+        """Latch the latest door coordinator failure reason with a timestamp.
+
+        The topic is latched, so we receive whatever was published previously
+        on every fresh subscribe. ``wait_for_target_reached`` compares this
+        timestamp against its own start time so old failures don't leak into
+        new navigation calls.
+        """
+        reason = (msg.data or "").strip()
+        if reason:
+            self.door_failure_reason = reason
+            self.door_failure_stamp = rospy.Time.now()
+            rospy.logwarn("Goal manager saw door_coordinator failure: %s", reason)
+        else:
+            # Coordinator publishes "" at init and can clear the reason
+            # on a fresh navigation start.
+            self.door_failure_reason = ""
+            self.door_failure_stamp = None
 
     def status_callback(self, msg):
         # check if the goal is reached
@@ -261,6 +322,14 @@ class GoalManager:
             status = latest_goal.status
             self.latest_status = status
             self.latest_status_text = latest_goal.text # this text often contains error messages when status is a failure
+            # Maintain a "PREEMPTED since" watermark so wait_for_target_reached
+            # can detect an abandoned goal (coordinator cancelled and nobody
+            # sent a replacement). Any non-PREEMPTED status resets it.
+            if status == 2:
+                if self._preempted_since is None:
+                    self._preempted_since = rospy.Time.now()
+            else:
+                self._preempted_since = None
             # status == 3 >>> "Goal Reached"
             if status == 3 and not self.goal_reached_logged:
                 rospy.loginfo("Goal reached.")
@@ -270,6 +339,7 @@ class GoalManager:
         else:
             self.goal_reached = False
             self.goal_reached_logged = False
+            self._preempted_since = None
 
     def check_inactivity(self):
         # Monitor inactivity and send the robot back to Home if needed

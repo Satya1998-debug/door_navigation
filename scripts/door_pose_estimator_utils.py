@@ -48,37 +48,30 @@ def compute_angle_bisector(normal1, normal2):
     return bisector
 
 
-def fit_plane(points_3d, ply_file_name=""):
+def fit_plane(points_3d, ply_file_name="", distance_threshold=0.02, min_inlier_ratio=0.3,
+              num_iterations=1000, min_points=50):
     try:
+        # guard against empty / too-small point sets
+        if points_3d is None or len(points_3d) < max(3, min_points):
+            print(f"Plane rejected: too few points ({0 if points_3d is None else len(points_3d)} < {max(3, min_points)})")
+            return None, None, None
+
         pcd = o3d.geometry.PointCloud() # empty point cloud
         pcd.points = o3d.utility.Vector3dVector(points_3d) # assign points to point cloud
-        
-        # chec dimesnions of point cloud
-        # # Calculate the bounding box dimensions
-        # min_coords = np.min(points_3d, axis=0)
-        # max_coords = np.max(points_3d, axis=0)
-        # dimensions = max_coords - min_coords
 
         # save point cloud for visualization/debugging
         if ply_file_name:
             o3d.io.write_point_cloud(f"{ply_file_name}_full.ply", pcd)
 
         # plane model: ax + by + cz + d = 0, inliers: list of point indices that are inliers to the plane
-        plane_model, inliers = pcd.segment_plane(distance_threshold=0.02, # 2 cm, as depth are in meters
-                                                 ransac_n=3, num_iterations=1000)
+        plane_model, inliers = pcd.segment_plane(distance_threshold=distance_threshold, # in meters
+                                                 ransac_n=3, num_iterations=num_iterations)
         a, b, c, d = plane_model
 
-        INLINER_THRESHOLD = 0.3  # at least 30% of points should be inliers to consider valid plane
-
-        # validate plane 
-        if len(points_3d) == 0:
-            print("No points for plane fitting")
-            return None, None, None
-                
         inliner_ratio = len(inliers) / len(points_3d)
-        
-        if inliner_ratio < INLINER_THRESHOLD:
-            print("Plane rejected: low inlier ratio")
+
+        if inliner_ratio < min_inlier_ratio:
+            print(f"Plane rejected: low inlier ratio ({inliner_ratio:.2f} < {min_inlier_ratio:.2f})")
             return None, None, None
         
         # calculate normal vector and distance

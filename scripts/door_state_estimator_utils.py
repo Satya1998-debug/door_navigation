@@ -32,10 +32,21 @@ from door_pose_estimator_utils import fit_plane, project_to_3d, visualize_plane_
 from utils.visualization import visualize_door_passability, visualize_roi
 from utils.utils import crop_to_bbox_depth, expand_bbox, divide_bbox, ring_mask
 
-# FX = 385.88861083984375
-# FY = 385.3906555175781
-# CX = 317.80999755859375
-# CY = 243.65032958984375
+# Robustness thresholds for the per-leaf classifier used by the double-door path.
+LEAF_MAX_NORMAL_DEV_DEG = 25.0   # leaf normal within this angle of the reference plane → leaf considered closed
+LEAF_MAX_DEPTH_GAP_M = 0.40      # leaf median depth farther than the reference by more than this → leaf considered open
+LEAF_MIN_POINTS = 100            # minimum valid depth points on a leaf ROI to attempt a plane fit
+
+# Thresholds for the leaf-vs-leaf coplanarity test used to build a reference
+# plane when no reliable wall/frame is available (e.g. recessed doors, or a
+# doorframe whose surrounding wall is perpendicular to the door plane).
+LEAF_PAIR_MAX_ANGLE_DEG = 15.0   # two closed leaves must be nearly coplanar
+LEAF_PAIR_MAX_DEPTH_GAP_M = 0.30 # ...and at similar median depth
+# The wall/frame plane is only trusted as a "closed reference" when its normal
+# is within this angle of at least one fitted leaf normal. Rejects the classic
+# false-negative case where the ring around the door picks up an alcove
+# side-wall or protruding frame that is perpendicular to the actual door plane.
+WALL_ALIGNMENT_MAX_DEG = 30.0
 
 ROBOT_WIDTH = 0.5  # in meters, robot width for door pass check
 EXPANSION_RATIO = 0.2  # ratio to expand door bbox for wall plane fitting
@@ -154,6 +165,25 @@ def estimate_door_state_ollama_vlm(rgb_img, is_passable="", door_open_percent=""
         print(f"Error during estimate_door_state_ollama_api: {e}")
         return None
 
+def make_fallback_conversation(door_state, door_type, is_passable):
+    """Human-friendly spoken sentence used when VLM is disabled or fails.
+
+    Called on the geometric path so the coordinator's `_speak(response.conversation)`
+    plays something meaningful instead of the literal string "NA".
+    """
+    kind = "double door" if door_type == "double" else "door"
+    state = (door_state or "").lower()
+    if state == "open":
+        if is_passable:
+            return f"The {kind} is open. I can pass through."
+        # open but not passable → something is blocking the opening
+        return f"The {kind} appears open but the opening is too narrow to pass."
+    if state == "semi_open":
+        return f"The {kind} is only partially open. Could someone please open it fully?"
+    if state == "closed":
+        return f"The {kind} is closed. Could someone please open it?"
+    return f"I cannot clearly tell the {kind} state. Please check."
+
 def calculate_door_opening_angle(n1, n2):
     ang = np.arccos(np.clip(np.dot(n1, n2) / (np.linalg.norm(n1) * np.linalg.norm(n2)), -1.0, 1.0))
     angle_deg = np.degrees(ang)
@@ -204,8 +234,10 @@ def is_door_passable(depth, bbox, FX, CX,
     
     valid_mask = np.isfinite(z) & (z > 0)
     if np.sum(valid_mask) < min_points:
-        print("Not enough valid depth points in slab region for door pass check.")
-        return 'unknown', 0.0
+        # not enough valid depth points in slab region for door pass check, so default to not-passable
+        print(f"Not enough valid depth points in slab region for door pass check "
+              f"({int(np.sum(valid_mask))} < {min_points}). Defaulting to not-passable.")
+        return False
     
     xv_valid = xv[valid_mask] # keeping only those meshgrid (horizontal) x points (which has valid depths)
     yv_valid = yv[valid_mask] # keeping only those meshgrid (vertical) y points (which has valid depths)
@@ -331,7 +363,7 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
 
         # door pass check
         s_time = time.time()
-        is_passable = is_door_passable(full_depth, door_bbox, intrinsics['FX'], intrinsics['CX'], visualize=visualize, visualize_3d=visualize)
+        is_passable = is_door_passable(full_depth, door_bbox, intrinsics['FX'], intrinsics['CX'], visualize=visualize, visualize_3d=visualize, intrinsics=intrinsics)
         print(f"Door passability check time: {time.time() - s_time:.2f} seconds")
         # door state, open percent (NOTE: geometrically to take decision)
         door_state, door_open_percent = calculate_door_state_single(door_opening_angle)
@@ -352,11 +384,148 @@ def estimate_single_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
             print("Invalid VLM response format. Falling back to geometric state.")
 
         # calculate post door pose
-        return {"door_state": door_state, "human_present": "NA", "conversation": "NA", "is_passable": is_passable}
+        conversation = make_fallback_conversation(door_state, "single", is_passable)
+        return {"door_state": door_state, "human_present": "no",
+                "conversation": conversation, "is_passable": is_passable}
 
     except Exception as e:
         print(f"Error in estimate_single_door_state: {e}")
         return None
+
+
+def _fit_leaf_plane(leaf_bbox, full_depth, intrinsics, tag):
+    """Fit a plane to a single door leaf using its own bbox on the full depth image.
+
+    Returns (inliers, normal, median_z, n_points). Any of these may be None if the
+    leaf ROI is too sparse or a plane cannot be fitted.
+    """
+    leaf_depth = crop_to_bbox_depth(full_depth, leaf_bbox)
+    if leaf_depth is None or leaf_depth.size == 0:
+        print(f"[{tag}] empty leaf depth crop")
+        return None, None, None, 0
+
+    x1, y1, _, _ = int(leaf_bbox[0]), int(leaf_bbox[1]), int(leaf_bbox[2]), int(leaf_bbox[3])
+    pts = project_to_3d(x1, y1, valid_mask=None, depth=leaf_depth, intrinsics=intrinsics)
+    n_pts = 0 if pts is None else len(pts)
+    print(f"[{tag}] valid 3D points: {n_pts}")
+    if n_pts < LEAF_MIN_POINTS:
+        return None, None, None, n_pts
+
+    inliers, normal, _ = fit_plane(pts, "", min_points=LEAF_MIN_POINTS)
+    if inliers is None or normal is None:
+        # retry once with looser thresholds (helps on textured/noisy leaves)
+        print(f"[{tag}] strict plane fit failed; retrying with laxer thresholds")
+        inliers, normal, _ = fit_plane(pts, "", distance_threshold=0.04, min_inlier_ratio=0.18, min_points=LEAF_MIN_POINTS,)
+    if inliers is None or normal is None:
+        return None, None, None, n_pts
+
+    median_z = float(np.median(np.asarray(inliers)[:, 2]))
+    return inliers, normal, median_z, n_pts # inliers: 3D points, normal: normal vector, median_z: median depth, n_pts: number of valid points
+
+
+def _classify_leaf(leaf_normal, leaf_z, wall_normal, wall_z, tag):
+    """Classify a single leaf as 'open' or 'closed' relative to a wall/frame reference plane."""
+    if leaf_normal is None:
+        # plane fit failed → the region is almost certainly not a coherent door surface,
+        # which is what we expect when that leaf is open.
+        print(f"[{tag}] no leaf plane → treating as OPEN")
+        return "open"
+    if wall_normal is None:
+        return None  # caller falls back to pairwise-angle logic
+    # both normals are flipped to face camera by fit_plane, so a direct dot is fine
+    cos_ang = float(np.clip(np.dot(leaf_normal, wall_normal), -1.0, 1.0))
+    ang_deg = float(np.degrees(np.arccos(cos_ang)))
+    depth_gap = None if (leaf_z is None or wall_z is None) else float(leaf_z - wall_z)
+    if ang_deg > LEAF_MAX_NORMAL_DEV_DEG:
+        print(f"[{tag}] normal deviates {ang_deg:.1f}° from ref (> {LEAF_MAX_NORMAL_DEV_DEG:.1f}°) → OPEN")
+        return "open"
+    if depth_gap is not None and depth_gap > LEAF_MAX_DEPTH_GAP_M:
+        print(f"[{tag}] {depth_gap:.2f} m behind ref (> {LEAF_MAX_DEPTH_GAP_M:.2f} m) → OPEN")
+        return "open"
+    print(f"[{tag}] angle={ang_deg:.1f}°, depth_gap={depth_gap if depth_gap is None else f'{depth_gap:.2f}m'} → CLOSED")
+    return "closed"
+
+
+def _angle_between_deg(a, b):
+    """Angle in degrees between two unit vectors, clipped for numerical safety."""
+    cos_a = float(np.clip(np.dot(a, b), -1.0, 1.0))
+    return float(np.degrees(np.arccos(cos_a)))
+
+
+def _pick_closed_reference(left_n, left_z, right_n, right_z, wall_n, wall_z):
+    """Pick the most trustworthy "what a CLOSED leaf looks like" reference.
+
+    Priority order (each step falls through to the next only if the current
+    signal is unreliable or unavailable):
+
+      1. Wall/frame plane, IF its normal is within ``WALL_ALIGNMENT_MAX_DEG``
+         of at least one fitted leaf normal. This is the original flush-wall
+         path — preserved unchanged for that case.
+      2. The average of both fitted leaves, IF they pass the pairwise
+         coplanarity test (angle ≤ ``LEAF_PAIR_MAX_ANGLE_DEG`` and depth
+         difference ≤ ``LEAF_PAIR_MAX_DEPTH_GAP_M``). This catches recessed
+         doors and doors whose wall/frame is perpendicular to the leaves.
+      3. Whichever single leaf plane fit succeeded. A tentative reference
+         used only to decide the other (failed) leaf as OPEN.
+      4. Wall alone, IF no leaves fit at all (degenerate but better than
+         nothing).
+      5. No reference — caller falls back to ``is_passable``.
+
+    Returns ``(ref_normal, ref_z, source_tag)``. ``ref_normal`` and ``ref_z``
+    are ``None`` when no reference is available.
+    """
+    # Priority 1: wall plane, validated against any fitted leaf.
+    if wall_n is not None:
+        fitted_leaves = [n for n in (left_n, right_n) if n is not None]
+        if fitted_leaves:
+            min_wall_leaf_ang = min(_angle_between_deg(wall_n, ln) for ln in fitted_leaves)
+            if min_wall_leaf_ang <= WALL_ALIGNMENT_MAX_DEG:
+                return wall_n, wall_z, f"wall (angle to closest leaf {min_wall_leaf_ang:.1f}°)"
+
+    # Priority 2: two fitted leaves in agreement.
+    if left_n is not None and right_n is not None:
+        angle_lr = _angle_between_deg(left_n, right_n)
+        depth_diff = abs(float(left_z - right_z))
+        if angle_lr <= LEAF_PAIR_MAX_ANGLE_DEG and depth_diff <= LEAF_PAIR_MAX_DEPTH_GAP_M:
+            ref_normal = (left_n + right_n) / 2.0
+            norm = float(np.linalg.norm(ref_normal))
+            if norm > 1e-6:
+                ref_normal = ref_normal / norm
+                ref_z = (left_z + right_z) / 2.0
+                return ref_normal, ref_z, (
+                    f"coplanar_leaves (Δang={angle_lr:.1f}°, "
+                    f"Δz={depth_diff:.2f}m)")
+
+    # Priority 3: exactly one leaf fitted — use it as a tentative reference.
+    # This is intentionally optimistic: a fitted plane is more likely a real
+    # surface than random background, so we lean toward calling the fitted
+    # leaf CLOSED and the failed leaf OPEN. In the rare pathological case
+    # where the "fitted" side is actually open (background wall) and the
+    # "closed" side failed, we'll only mislabel to semi_open — is_passable
+    # will typically catch it and prevent unsafe traversal.
+    if left_n is not None and right_n is None:
+        return left_n, left_z, "left_leaf_only (right plane fit failed)"
+    if right_n is not None and left_n is None:
+        return right_n, right_z, "right_leaf_only (left plane fit failed)"
+
+    # Priority 4: wall alone (no leaves fitted) — degenerate but preserves
+    # the previous behavior of "wall exists → use it".
+    if wall_n is not None and left_n is None and right_n is None:
+        return wall_n, wall_z, "wall (no leaves to cross-check)"
+
+    # Priority 5: nothing usable.
+    return None, None, "no_reference"
+
+
+def _combine_leaf_states(left_state, right_state, is_passable):
+    """Combine per-leaf open/closed labels into an overall double-door state."""
+    if left_state == "closed" and right_state == "closed":
+        return "closed"
+    if left_state == "open" and right_state == "open":
+        return "open" if is_passable else "semi_open"
+    # exactly one leaf open
+    return "open" if is_passable else "semi_open"
+
 
 def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visualize=True, use_vlm=False, intrinsics=None):
     try:
@@ -364,7 +533,7 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         if len(door_bbox) == 0:
             print("Empty door box provided for double door state estimation.")
             return None
-        
+
         # get bbox coordinates
         x1, y1, x2, y2 = (int(door_bbox[0]), int(door_bbox[1]), int(door_bbox[2]), int(door_bbox[3]))
 
@@ -372,63 +541,101 @@ def estimate_double_door_state(door_bbox, rgb_rs, roi_depth, full_depth, visuali
         print(f"Image dimensions: width={img_width}, height={img_height}")
 
         # divide the double door bbox into two single door bboxes
-        left_bbox, right_bbox = divide_bbox(rgb_rs, x1, x2, y1, y2, 
-                                            exp_ratio=EXPANSION_RATIO, 
+        left_bbox, right_bbox = divide_bbox(rgb_rs, x1, x2, y1, y2,
+                                            exp_ratio=EXPANSION_RATIO,
                                             visualize_bbox=visualize,
                                             img_width=img_width, img_height=img_height)
         print(f"Left door bbox: {left_bbox}, Right door bbox: {right_bbox}")
-        
-        if visualize: # visualize ROI
+
+        if visualize:  # visualize ROI
             visualize_roi(rgb_rs, door_bbox, roi_depth, disp_text="double-door")
 
-        # fit plane for left door
+        # reference wall/frame plane from a ring around the whole double-door bbox
         s_time = time.time()
-        points_3d_door_left = project_to_3d(left_bbox[0], left_bbox[1], valid_mask=None, depth=roi_depth, intrinsics=intrinsics)
-        door_l_inliners, door_l_n, _ = fit_plane(points_3d_door_left)
-        if door_l_n is None or door_l_inliners is None:
-            print("Left door plane fit failed")
-            return None
-        if visualize:
-            visualize_plane_with_normal(door_l_inliners, normal_vector=door_l_n, disp_text="double-left-door")
+        outer_bbox = expand_bbox(x1, x2, y1, y2, exp_ratio=EXPANSION_RATIO, img_width=img_width, img_height=img_height)
+        exp_mask = ring_mask(img_width, img_height, (x1, y1, x2, y2), outer_bbox)
+        x1_o, y1_o, _, _ = outer_bbox
+        points_3d_wall = project_to_3d(x1_o, y1_o, valid_mask=exp_mask, depth=full_depth, intrinsics=intrinsics)
+        wall_inliers, wall_n, _ = fit_plane(points_3d_wall, "")
+        wall_z = float(np.median(np.asarray(wall_inliers)[:, 2])) if wall_inliers is not None else None
+        if wall_n is None:
+            print("Wall/frame plane fit failed; will fall back to pairwise leaf-angle method")
+        else:
+            print(f"Wall plane fitted (median z={wall_z:.2f} m)")
+            if visualize:
+                visualize_plane_with_normal(wall_inliers, normal_vector=wall_n,
+                                            disp_text="double-door-wall-plane")
 
-        # fit plane for right door
-        points_3d_door_right = project_to_3d(right_bbox[0], right_bbox[1], valid_mask=None, depth=roi_depth, intrinsics=intrinsics)
-        door_r_inliners, door_r_n, _ = fit_plane(points_3d_door_right)
-        if door_r_n is None or door_r_inliners is None:
-            print("Right door plane fit failed")
-            return None
-        if visualize:
-            visualize_plane_with_normal(door_r_inliners, normal_vector=door_r_n, disp_text="double-right-door")
-        
-        # calculate angle between two door normals
-        side_doors_angle = calculate_door_opening_angle(door_l_n, door_r_n)
-        print(f"Estimated door opening angle: {side_doors_angle} degrees")
-        print(f"Plane fitting & angle calculation time: {time.time() - s_time:.2f} seconds")
+        # per-leaf plane fits from full_depth using each leaf's own bbox 
+        left_inliers,  left_n,  left_z,  _ = _fit_leaf_plane(left_bbox,  full_depth, intrinsics, "left-leaf")
+        right_inliers, right_n, right_z, _ = _fit_leaf_plane(right_bbox, full_depth, intrinsics, "right-leaf")
 
-        # door pass check
+        if visualize and left_inliers is not None:
+            visualize_plane_with_normal(left_inliers, normal_vector=left_n, disp_text="double-left-door")
+        if visualize and right_inliers is not None:
+            visualize_plane_with_normal(right_inliers, normal_vector=right_n, disp_text="double-right-door")
+
+        print(f"Plane fitting time: {time.time() - s_time:.2f} seconds")
+
+        # passability check on the full opening
         s_time = time.time()
-        is_passable = is_door_passable(full_depth, door_bbox, intrinsics['FX'], intrinsics['CX'], visualize=visualize, visualize_3d=visualize)
+        is_passable = is_door_passable(full_depth, door_bbox,
+                                       intrinsics['FX'], intrinsics['CX'],
+                                       visualize=visualize, visualize_3d=visualize,
+                                       intrinsics=intrinsics)
         print(f"Door passability check time: {time.time() - s_time:.2f} seconds")
-        # door state, open percent (NOTE: geometrically to take decision)
-        door_state = calculate_door_state_double(side_doors_angle, is_passable=is_passable)
-        
-        # VLM based door state estimation
+
+        # decide overall state
+        side_doors_angle = 0.0  # kept for logging / VLM prompt
+
+        # Pick the most trustworthy CLOSED-reference we can build.
+        # Order: wall (if aligned with a leaf) > coplanar-leaves > single leaf > wall-alone.
+        ref_n, ref_z, ref_src = _pick_closed_reference(
+            left_n, left_z, right_n, right_z, wall_n, wall_z)
+        print(f"CLOSED-reference source: {ref_src}")
+
+        if ref_n is not None:
+            # Existing classifier semantics preserved: leaf normal + depth vs
+            # reference plane. The "reference" is just no-longer-forced to be
+            # the wall.
+            left_state  = _classify_leaf(left_n,  left_z,  ref_n, ref_z, "left-leaf")
+            right_state = _classify_leaf(right_n, right_z, ref_n, ref_z, "right-leaf")
+            door_state = _combine_leaf_states(left_state, right_state, is_passable)
+            print(f"Leaf states → left={left_state}, right={right_state} ⇒ door_state={door_state}")
+        else:
+            # No trustworthy reference at all: preserve the previous fallback
+            # exactly so the behavior on truly-unreadable frames is unchanged.
+            if left_n is not None and right_n is not None:
+                side_doors_angle = calculate_door_opening_angle(left_n, right_n)
+                print(f"Estimated door opening angle (leaf-vs-leaf): {side_doors_angle:.2f} degrees")
+                door_state = calculate_door_state_double(side_doors_angle, is_passable=is_passable)
+            elif left_n is None and right_n is None:
+                print("Both leaf plane fits failed and no wall reference; treating as unknown/open based on passability")
+                door_state = "open" if is_passable else "unknown"
+            else:  # when one leaf plane fit failed, we treat the door as semi_open/open based on passability
+                print("One leaf plane fit failed and no wall reference; treating as semi_open/open based on passability")
+                door_state = "open" if is_passable else "semi_open"
+
+        # optional VLM refinement
         if use_vlm:
-             s_time = time.time()
-             door_state_res = estimate_door_state_ollama_vlm(rgb_rs, is_passable=is_passable, 
+            s_time = time.time()
+            door_state_res = estimate_door_state_ollama_vlm(rgb_rs, is_passable=is_passable,
                                                             left_right_door_angle=side_doors_angle,
                                                             door_type="double")
-             print(f"VLM door state estimation time: {time.time() - s_time:.2f} seconds")
-             if isinstance(door_state_res, dict):
-                 door_state_res["is_passable"] = is_passable
-                 return door_state_res
-             print("Invalid VLM response format. Falling back to geometric state.")
-       
-        return {"door_state": door_state, "human_present": "NA", "conversation": "NA", "is_passable": is_passable}
+            print(f"VLM door state estimation time: {time.time() - s_time:.2f} seconds")
+            if isinstance(door_state_res, dict):
+                door_state_res["is_passable"] = is_passable
+                return door_state_res
+            print("Invalid VLM response format. Falling back to geometric state.")
 
+        conversation = make_fallback_conversation(door_state, "double", is_passable)
+        return {"door_state": door_state, "human_present": "no",
+                "conversation": conversation, "is_passable": is_passable}
 
     except Exception as e:
         print(f"Error in estimate_double_door_state: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def estimate_door_state_test(img_path, depth_path, visualize=True, use_vlm=False, intrinsics=None):
