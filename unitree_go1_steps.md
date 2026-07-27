@@ -73,9 +73,9 @@ source
 - ping the Go1 internal devices 
 ```bash
 ping 192.168.123.161 # for RPI
-ping 192.168.123.15 # for jetson nano 15 (usd for navigation)
+ping 192.168.123.15 # for Jetson Orin at .15 (used for navigation)
 ```
-- export ros maste IP so that the ros nodes are visible
+- export ros master IP so that the ros nodes are visible
 ```bash
 export ROS_MASTER_URI=http://192.168.123.15:11311
 export ROS_HOSTNAME=192.168.123.15

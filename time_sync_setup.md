@@ -6,12 +6,14 @@ Jetson.
 
 ## Topology and roles
 
-| Device | IP on robot LAN | Role | Has RTC? |
-|---|---|---|---|
-| Local PC | `192.168.123.148` | Bootstrap time source (has internet + real time) | yes |
-| Jetson (Orin) | `192.168.123.147` | **Chrony client** to PC 148 **and chrony server** for the Go1 | **no** — boots at 1970 |
-| Go1 head Nano | `192.168.123.15` | Chrony/ntpdate client of the Jetson | no |
-| Go1 other boards | `192.168.123.13`, `.14`, `.161` | Same | no |
+
+| Device           | IP on robot LAN                 | Role                                                          | Has RTC?               |
+| ---------------- | ------------------------------- | ------------------------------------------------------------- | ---------------------- |
+| Local PC         | `192.168.123.148`               | Bootstrap time source (has internet + real time)              | yes                    |
+| Jetson (Orin)    | `192.168.123.147`               | **Chrony client** to PC 148 **and chrony server** for the Go1 | **no** — boots at 1970 |
+| Go1 head Nano    | `192.168.123.15`                | Chrony/ntpdate client of the Jetson                           | no                     |
+| Go1 other boards | `192.168.123.13`, `.14`, `.161` | Same                                                          | no                     |
+
 
 The Jetson is the pivot: it's both a client (of PC 148) and a server (to the Go1).
 Because it has no RTC, its clock is wrong on every fresh power-on until PC 148
@@ -19,9 +21,11 @@ seeds it.
 
 ---
 
+
+
 ## ⚠️ Critical rule for the Jetson
 
-**Never install `systemd-timesyncd` on the Jetson.** The `chrony` and
+**Never install** `systemd-timesyncd` **on the Jetson.** The `chrony` and
 `systemd-timesyncd` packages are declared `Conflicts:` in Debian/Ubuntu, so
 `apt install systemd-timesyncd` will *silently* run `apt remove chrony` in the
 same transaction. The Jetson then loses its ability to serve time to the Go1
@@ -32,6 +36,8 @@ The correct Jetson setup is `chrony` doing **both** client and server duties.
 `systemd-timesyncd` is only used on client-only machines like the Go1 boards.
 
 ---
+
+
 
 ## 1. One-time Jetson setup (or recovery if chrony was removed)
 
@@ -70,6 +76,8 @@ sudo ss -ulnp | grep ':123'                # chronyd bound to 0.0.0.0:123
 chronyc tracking | grep -E 'Reference ID|Stratum|Leap status'
 apt-mark showhold | grep chrony            # confirms hold
 ```
+
+
 
 ### Jetson `/etc/chrony/chrony.conf` (client + server)
 
@@ -118,6 +126,8 @@ chronyc tracking
 
 ---
 
+
+
 ## 2. One-time PC (`192.168.123.148`) setup
 
 The PC needs to be an NTP server on the robot LAN. Same package, simpler config.
@@ -150,6 +160,8 @@ extra work is needed for NTP itself — the `allow` line is enough.
 
 ---
 
+
+
 ## 3. One-time Go1 setup (per onboard board)
 
 Each Go1 board can either do a one-shot `ntpdate` at session start (Section 4)
@@ -177,50 +189,42 @@ Look for `NTP service: active` and `System clock synchronized: yes`.
 
 ---
 
-## 4. Per-boot ritual (what to do every session)
+
+
+## 4. Per-boot steps (need to be done every session)
 
 This is the actual daily flow, in order:
 
 1. **Power on the Jetson.** It boots at ~`1970-01-01`.
 2. **Plug PC 148 into the Jetson (Ethernet) and share internet.**
-   The Jetson's `eth0` should get `192.168.123.147`, PC is `192.168.123.148`.
+  The Jetson's `eth0` should get `192.168.123.147`, PC is `192.168.123.148`.
 3. **On the Jetson, kick chrony so it re-resolves and re-syncs:**
-
-   ```bash
+  ```bash
    sudo systemctl restart chrony
    chronyc sources -v          # 192.168.123.148 should be reachable (^*)
    chronyc tracking            # Leap status must become 'Normal'
    date                        # sanity check
-   ```
-
+  ```
    Because `makestep 1.0 -1` is in the config, chrony will step the clock
    from 1970 to now automatically once it has a source.
-
    *If you're impatient*, force a step:
-
-   ```bash
-   sudo chronyc -a makestep
-   ```
-
-5. **Unplug PC 148, plug the Go1 in.**
-   The Jetson keeps serving time thanks to `local stratum 10`.
-
-6. **On each Go1 board you care about:**
-
-   ```bash
+4. **Unplug PC 148, plug the Go1 in.**
+  The Jetson keeps serving time thanks to `local stratum 10`.
+5. **On each Go1 board you care about:**
+  ```bash
    ssh unitree@192.168.123.15
    sudo ntpdate 192.168.123.147          # one-shot
    # or, if Section 3 was done, timesyncd will handle it automatically
    timedatectl status
-   ```
-
-7. **On the Jetson, confirm the Go1 is talking to it:**
-
-   ```bash
+  ```
+6. **On the Jetson, confirm the Go1 is talking to it:**
+  ```bash
    sudo chronyc clients        # Go1 IPs should appear here
-   ```
+  ```
 
 ---
+
+
 
 ## 5. Verification checklist
 
@@ -258,7 +262,11 @@ rosrun tf tf_monitor
 
 ---
 
+
+
 ## 6. Troubleshooting
+
+
 
 ### "chronyd: command not found" or `dpkg -l chrony` starts with `rc`
 
@@ -289,42 +297,3 @@ sudo systemctl unmask chrony
 sudo systemctl daemon-reload
 sudo systemctl enable --now chrony
 ```
-
-### Jetson clock is right but Go1 gets "no server suitable for synchronization"
-
-Chrony is running but not reachable from the Go1 subnet. Check:
-
-```bash
-sudo ss -ulnp | grep ':123'                    # must show 0.0.0.0:123, not just 127.0.0.1
-grep -E '^(allow|bindaddress|local)' /etc/chrony/chrony.conf
-```
-
-Must contain `allow 192.168.123.0/24` and no `bindaddress` line (or a
-`bindaddress` that covers `eth0`).
-
-Also from the Go1:
-
-```bash
-nc -u -z -v 192.168.123.147 123
-```
-
-If this fails, it's an IP/route/firewall issue — not chrony.
-
-### Nothing at all in `chronyc clients`
-
-Either no Go1 board has queried yet, or your Jetson chrony is bound only to
-`127.0.0.1`. Run `sudo chronyc clients` (needs sudo). If the Go1 boards have
-made at least one query, they'll appear here.
-
----
-
-## Notes / gotchas
-
-- **RTC.** The Jetson Orin dev carrier ships without a coin-cell backup for the
-  RTC. Adding one would eliminate the "boots at 1970" problem and make this
-  whole ritual unnecessary. Until then, PC 148 is the seed source.
-- **Automatic Go1 sync.** After Section 3, `ntpdate` in Section 4 is only a
-  belt-and-suspenders one-shot; `systemd-timesyncd` on the Go1 boards keeps them
-  in sub-millisecond agreement with the Jetson continuously.
-- **Never** repeat: **do not install `systemd-timesyncd` on the Jetson.** If a
-  future note, script, or AI suggests it, ignore it.

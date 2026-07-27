@@ -59,7 +59,7 @@ rostopic echo -n1 /camera/color/camera_info
 ## 4. Localization, map, and navigation stack
 
 ```bash
-# Move base + AMCL (TEB local planner, /goal remapped from move_base_simple/goal)
+# Move base + AMCL (TEB local planner; goal_sender publishes on /goal, remapped to move_base_simple/goal)
 roslaunch navigation go1_move_base.launch
 
 # Full nav (map_server + move_base)
@@ -187,8 +187,11 @@ rostopic echo /door_coordinator/door_on_path
 
 ### Voice assistant (optional)
 
+Single owner of the mic/speakers. Started automatically by `door_navigation.launch`;
+run it standalone with:
+
 ```bash
-rosrun door_navigation voice_assistant.py # run node
+rosrun door_navigation voice_assistant_node.py
 ```
 
 ```bash
@@ -196,28 +199,24 @@ rosservice call /voice/speak "{text: 'hello testing voice service', blocking: tr
 rosservice call /voice/listen "{timeout_sec: 8.0, grammar: ''}"  # listen
 ```
 
-## 7. Robot command bridge (agent-facing services)
+## 7. Robot command bridge (agent-facing service)
 
 Node: `robot_command_bridge.py`
-Services:
-- `/agent/start_door_coordinator` (`std_srvs/Trigger`) — roslaunches the door
-  pipeline
-- `/agent/start_navigation` (`door_navigation/StartNavigation`) — sends a goal
-  to `goal_sender` and blocks until arrival / failure / timeout
+Service:
+- `/agent/start_navigation` (`door_navigation/StartNavigation`) — wraps the
+  `GoalManager`, publishes the saved pose on `/goal`, and blocks until arrival /
+  failure / timeout, then returns `(success: bool, reason: str)`.
+
+Parameters (private): `~nav_wait_timeout_sec` (default 500 s in code / 300 s in
+`door_agent_bringup.launch`), `~nav_position_tolerance` (default 0.15 m).
 
 ```bash
-rosrun door_navigation robot_command_bridge.py _locations_yaml:=/home/ias/satya/catkin_ws/src/door_navigation/saved_locations_map_area_04.yaml
+rosrun door_navigation robot_command_bridge.py
 
-# Trigger door coordinator launch
-rosservice call /agent/start_door_coordinator
-
-# Drive to a saved location (room name takes priority over person)
+# Drive to a saved location (room takes priority over person)
 rosservice call /agent/start_navigation "person: ''
 room: 'home'"
 ```
-
-Tip: in `robot_command_bridge.py` set `self.testing = False` to actually call
-the goal manager instead of the simulated 5-second sleep.
 
 ## 8. ROS Bridge (LangChain / Python 3.10 agents ↔ ROS)
 
