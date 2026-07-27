@@ -15,7 +15,64 @@ git clone git@github.com:Satya1998-debug/door_navigation.git
 
 
 
-### 1. CV Bridgefor python 3.8 (must be done)
+### 1. Python venv (Jetson)
+
+> On the Jetson we use JetPack's system Python 3.8 + system CUDA. See [`setup_issues_jetson_env.md`](setup_issues_jetson_env.md) for the underlying reasoning.
+>
+> **Do NOT use `uv`, `conda`, or `pipx`.** They isolate the venv away from the system-CUDA / JetPack PyTorch stack, so `torch.cuda.is_available()` will silently return `False`. The venv here is an **overlay**, not a sandbox.
+
+- install the `venv` module for Python 3.8
+
+```bash
+sudo apt install python3.8-venv
+```
+
+- create the venv **outside** the catkin workspace, with system site-packages inherited (so ROS's `python3-*` packages and the JetPack PyTorch wheel remain visible)
+
+```bash
+python3 -m venv ~/MT/venv38 --system-site-packages
+```
+
+- source it in `~/.bashrc` so every terminal picks it up
+
+```bash
+echo 'source ~/MT/venv38/bin/activate' >> ~/.bashrc
+source ~/.bashrc
+```
+
+- verify the venv is active and points at Python 3.8
+
+```bash
+which python        # -> ~/MT/venv38/bin/python
+python --version    # -> Python 3.8.x
+```
+
+- upgrade `pip` inside the venv (warnings about system packages are expected and safe)
+
+```bash
+python -m pip install --upgrade pip
+```
+
+- PyTorch is a **platform dependency**, not a Python package. Never run `pip install torch`. Install the NVIDIA wheel matching your JetPack:
+
+```bash
+cat /etc/nv_tegra_release   # note the R3x.y.z / JetPack version
+# then follow https://forums.developer.nvidia.com/t/pytorch-for-jetson/ for the matching wheel
+```
+
+- verify CUDA is reachable from the venv
+
+```bash
+python - <<EOF
+import torch
+print("torch:", torch.__version__)
+print("cuda available:", torch.cuda.is_available())
+EOF
+```
+
+
+
+### 2. CV Bridge for python 3.8 (must be done)
 
 - clone only noetic branch of cv_bridge repo
 
@@ -48,7 +105,7 @@ EOF
 
 
 
-### 2. Install dependencies for ROS OpenCV
+### 3. Install dependencies for ROS OpenCV
 
 ```bash
 sudo apt update
@@ -61,7 +118,9 @@ ros-noetic-image-proc
 
 
 
-### 3. Installation steps for realsense ros wrapper
+### 4. Installation steps for required Dependencies (VLM, camera, etc.)
+
+### realsense ros
 
 - follow instructions from [https://github.com/realsenseai/realsense-ros/tree/ros1-legacy?tab=readme-ov-file](https://github.com/realsenseai/realsense-ros/tree/ros1-legacy?tab=readme-ov-file)
 - connect camera and ready to go
@@ -87,30 +146,6 @@ roslaunch realsense2_camera rs_camera.launch initial_reset:=true depth_width:=64
 realsense-viewer # verify
 ```
 
-
-
-### 4. Build workspace
-
-- after all installations are done, build the catkin workspace (catkin_make is mostly used here and is straightforward)
-
-```bash
-cd ~/MT/catkin_ws
-catkin_make
-```
-
-- install catkin tools for python package management
-
-```bash
-sudo apt install python3-catkin-tools
-```
-
-- configure the workspace but compiles(source code to machine code) only the specified package
-
-```bash
-catkin_make --pkg door_navigation
-```
-
-NOTE: Donot mix catkin build with catkin_make in the same workspace, it may lead to build errors. Use only one of them. They have different build systems.
 
 ### some packages to be install for vision related tasks
 
@@ -145,6 +180,8 @@ sudo apt-get install -y liblcm-dev # for a2_ros2udp pkg (Unitree Go1 SDK)
 
 ### Transformer models installation
 
+> All `pip install` commands below run **inside the Py 3.8 venv from Section 1** (`~/MT/venv38`). Do **not** substitute `uv pip install` — see [`setup_issues_jetson_env.md`](setup_issues_jetson_env.md).
+
 - create a directory to store all transformer models
 
 ```bash
@@ -152,44 +189,46 @@ mkdir ~/door_navigation/src/door_navigation/py_packages/
 cd ~/door_navigation/src/door_navigation/py_packages/
 ```
 
-- clone all respositories in py_packages directory and install requirements in uv venv
-- Download the models as per instructions in respective repos (usually checkpoints or weights folders)
+- clone all repositories in `py_packages/` and install their requirements inside the venv
+- Download the models as per instructions in respective repos (usually `checkpoints/` or `weights/` folders)
 
 
 
 #### DepthAnythingV2
 
-- clone repo and install requirements inside the uv venv
+- clone repo and install requirements inside the venv
 
 ```bash
 git clone https://github.com/DepthAnything/Depth-Anything-V2
-uv pip install -r Depth-Anything-V2/requirements.txt
+pip install -r Depth-Anything-V2/requirements.txt
 ```
 
-- rename the parent dir ater cloning to "depth_anything_v2" for easy imports
-- download the model weights as per instructions in the repo (store in door_navigation/checkpoints/)
+- rename the parent dir after cloning to `depth_anything_v2` for easy imports
+- download the model weights as per instructions in the repo (store in `door_navigation/checkpoints/`)
+
+> Before installing, strip any `nvidia-*` packages from `requirements.txt` and pin `tokenizers==0.15.2`, `huggingface-hub==0.24.7`. Also `export HF_HUB_DISABLE_XET=1`. See [`setup_issues_jetson_env.md`](setup_issues_jetson_env.md) for why.
 
 
 
 #### Yolo via Ultralytics
 
-- install ultralytics package inside uv venv
+- install `ultralytics` inside the venv
 
 ```bash
-uv pip install ultralytics
+pip install ultralytics
 ```
 
-- keep the weights in door_navigation/weights/
+- keep the weights in `door_navigation/weights/`
 
 
 
 #### VLMs
 
-- pull the models via ollama commands inside uv venv
-- install ollama python client inside uv venv
+- pull the models via ollama commands (system-wide)
+- install ollama python client inside the venv
 
 ```bash
-uv pip install ollama
+pip install ollama
 ```
 
 
@@ -204,14 +243,46 @@ catkin_make -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 ```
 
 
+### 5. Build workspace
+
+- after all installations are done, build the catkin workspace (catkin_make is mostly used here and is straightforward)
+
+```bash
+cd ~/MT/catkin_ws
+catkin_make
+```
+
+- install catkin tools for python package management
+
+```bash
+sudo apt install python3-catkin-tools
+```
+
+- configure the workspace but compiles(source code to machine code) only the specified package
+
+```bash
+catkin_make --pkg door_navigation
+```
+
+NOTE: Donot mix catkin build with catkin_make in the same workspace, it may lead to build errors. Use only one of them. They have different build systems.
+
 
 ### Run ROS Bridge server
+
+- install rosbridge (system-wide, **not** inside the venv)
+
+```bash
+sudo apt-get install ros-noetic-rosbridge-suite
+sudo apt install python3-tornado python3-twisted
+```
 
 - to enable communication between ROS and langchain agents, run the rosbridge server
 
 ```bash
 roslaunch rosbridge_server rosbridge_websocket.launch
 ```
+
+> If `roslaunch` throws an `attr.s` / `AttributeError` from `twisted`, deactivate the venv and reinstall the system `python3-attr`/`python3-twisted`. Full fix in [`setup_issues_jetson_env.md`](setup_issues_jetson_env.md#ros-bridge-issue).
 
 
 

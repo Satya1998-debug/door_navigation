@@ -1,4 +1,4 @@
-# door_navigation
+# Door Navigation
 
 ROS Noetic package for **indoor navigation through doors** on a Unitree Go1 with a Jetson Orin and a RealSense RGB-D camera. It plugs a lightweight door-perception + coordinator layer on top of an existing `move_base` / AMCL stack, and exposes an agent-facing ROS service so an external LLM guide (running outside ROS) can request navigation over rosbridge.
 
@@ -8,18 +8,17 @@ ROS Noetic package for **indoor navigation through doors** on a Unitree Go1 with
 
 The complete system connects the human-facing agent, rosbridge service layer, and ROS navigation middleware:
 
-![Overall human-agent-rosbridge-ROS workflow](docs/images/01_overall_workflow.png)
+Overall human-agent-rosbridge-ROS workflow
 
 ### ROS navigation and door traversal
 
 The ROS-side flow is split into goal dispatch and path monitoring (Part 1), followed by door perception, passability decisions, human approval, and traversal (Part 2):
 
-<p align="center">
-  <img src="docs/images/04a_ros_flow_after_bridge_part1.png" alt="ROS flow Part 1: navigation trigger, path monitoring, and pre-door approach" width="48%">
-  <img src="docs/images/04b_ros_flow_after_bridge_part2.png" alt="ROS flow Part 2: door handling, approval, and traversal" width="48%">
-</p>
+
 
 ---
+
+
 
 ## Short system overview
 
@@ -45,43 +44,108 @@ The ROS-side flow is split into goal dispatch and path monitoring (Part 1), foll
 
 ---
 
+
+
 ## Documentation index
 
-| Doc | What it covers |
-|---|---|
-| [`SETUP.md`](SETUP.md) | Workspace bootstrap, cv_bridge for Python 3.8, RealSense wrapper, catkin build, transformer models (DepthAnythingV2, YOLO, VLM via Ollama), rosbridge, TensorRT conversion. |
-| [`internet_setup.md`](internet_setup.md) | Getting the Jetson online via the IAS PC (`192.168.123.148`), then Uni-Stuttgart Wi-Fi, then back onto the Go1 LAN. |
-| [`time_sync_setup.md`](time_sync_setup.md) | Chrony topology PC↔Jetson↔Go1, the strict "never install `systemd-timesyncd` on the Jetson" rule, per-boot procedure, verification checklist, troubleshooting. |
-| [`commands.md`](commands.md) | Day-to-day cheatsheet: sourcing the workspace, camera launch, `move_base`, goal sender, per-node run commands, rosbridge, rosbag recording/playback, TensorRT commands. |
-| [`setup_issues_jetson_env.md`](setup_issues_jetson_env.md) | Jetson-specific gotchas (Python venv, PyTorch wheels, ROS bridge `attrs`/`twisted` fix). |
-| [`unitree_go1_steps.md`](unitree_go1_steps.md) | Go1 remote-controller, calibration, power-on/off sequence, high-level vs low-level mode. |
-| [`TRT_ENGINE_PERFORMANCE_ACHIEVEMENTS.md`](TRT_ENGINE_PERFORMANCE_ACHIEVEMENTS.md) | DepthAnythingV2 TRT vs PyTorch benchmark notes. |
+
+| Doc                                                                                | What it covers                                                                                                                                                              |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[SETUP.md](SETUP.md)`                                                             | Workspace bootstrap, cv_bridge for Python 3.8, RealSense wrapper, catkin build, transformer models (DepthAnythingV2, YOLO, VLM via Ollama), rosbridge, TensorRT conversion. |
+| `[internet_setup.md](internet_setup.md)`                                           | Getting the Jetson online via the IAS PC (`192.168.123.148`), then Uni-Stuttgart Wi-Fi, then back onto the Go1 LAN.                                                         |
+| `[time_sync_setup.md](time_sync_setup.md)`                                         | Chrony topology PC↔Jetson↔Go1, the strict "never install `systemd-timesyncd` on the Jetson" rule, per-boot procedure, verification checklist, troubleshooting.              |
+| `[commands.md](commands.md)`                                                       | Day-to-day cheatsheet: sourcing the workspace, camera launch, `move_base`, goal sender, per-node run commands, rosbridge, rosbag recording/playback, TensorRT commands.     |
+| `[setup_issues_jetson_env.md](setup_issues_jetson_env.md)`                         | Jetson-specific gotchas (Python venv, PyTorch wheels, ROS bridge `attrs`/`twisted` fix).                                                                                    |
+| `[unitree_go1_steps.md](unitree_go1_steps.md)`                                     | Go1 remote-controller, calibration, power-on/off sequence, high-level vs low-level mode.                                                                                    |
+| `[TRT_ENGINE_PERFORMANCE_ACHIEVEMENTS.md](TRT_ENGINE_PERFORMANCE_ACHIEVEMENTS.md)` | DepthAnythingV2 TRT vs PyTorch benchmark notes.                                                                                                                             |
+
 
 ---
 
-## Quick start (assumes SETUP.md is already done and clocks are in sync)
 
-Terminal 1 — ROS master:
+
+## Quick start (assumes `SETUP.md` is done and clocks are in sync)
+
+> Prerequisite (per boot): PC ↔ Jetson ↔ Go1 clock sync green (see [`time_sync_setup.md`](time_sync_setup.md)). If clocks drift, TF and rosbridge will fail in confusing ways.
+
+The Go1 owns `roscore` and the base navigation stack. The Jetson runs perception, the door pipeline, rosbridge, and the LLM guide. Every Jetson terminal expects the workspace to be sourced and pointed at the dog's master:
+
 ```bash
 source ~/satya/catkin_ws/devel/setup.bash
-export ROS_MASTER_URI=http://192.168.123.15:11311
-export ROS_HOSTNAME=192.168.123.15
-roscore
+export ROS_MASTER_URI=http://192.168.123.15:11311   # roscore runs on the Go1
+export ROS_HOSTNAME=192.168.123.147
 ```
 
-Terminal 2 — base navigation stack (map + move_base + AMCL, from the `navigation` package):
+### 1. On the Go1 — base navigation + `roscore`
+
+SSH into the dog and launch its navigation package. This brings up `roscore`, the map, LIO-SAM localization, `move_base`, and TEB in one shot:
+
 ```bash
-roslaunch navigation go1_navigation.launch map_file:=/home/maps/gmapping/map_test.yaml
+ssh unitree@192.168.123.15
+cd /home/unitree/UnitreeSLAM/catkin_ws_3d/src/Go1_nav
+roslaunch go1_nav go1_navigation.launch \
+    map_file:=/home/unitree/.../map_area_04.yaml
 ```
 
-Terminal 3 — door pipeline + rosbridge + agent bridge:
+The map used here **must match** the `saved_locations_map_area_04.yaml` used on the Jetson in steps 2–3, otherwise stored poses land in the wrong frame.
+
+### 2. On the Jetson — initial pose + auxiliary bringup
+
+**2a. Publish the initial pose to `/initialpose`** (LIO-SAM/AMCL will refine it with ICP once the camera and lidar are streaming):
+
 ```bash
-roslaunch door_navigation door_agent_bringup.launch \
-    nav_wait_timeout_sec:=1200 \
-    nav_position_tolerance:=0.15
+rosrun door_navigation set_initial_pose.py \
+    --location home \
+    --yaml $(rospack find door_navigation)/saved_locations_map_area_04.yaml
 ```
 
-Terminal 4 (optional, without the LLM) — trigger a goal directly:
+**2b. Launch the auxiliary stack** — camera, rosbridge websocket (`:9090`), `robot_command_bridge` (`/agent/start_navigation`), and the voice assistant node:
+
+```bash
+roslaunch door_navigation auxilary_launch.launch
+```
+
+`robot_command_bridge` and `GoalManager` auto-pick a `saved_locations*.yaml` from the package. If you keep multiple maps, force the right one explicitly:
+
+```bash
+roslaunch door_navigation auxilary_launch.launch \
+    locations_yaml:=$(rospack find door_navigation)/saved_locations_map_area_04.yaml
+```
+
+### 3. On the Jetson — door pipeline
+
+Either bring up all three door nodes together:
+
+```bash
+roslaunch door_navigation door_navigation.launch
+```
+
+Or run them individually when debugging one at a time:
+
+```bash
+rosrun door_navigation door_detect_pose_estimate_node.py   # YOLO + DepthAnythingTRT -> /door_poses
+rosrun door_navigation door_state_estimator_node.py        # /door/estimate_state service (VLM + geometry)
+rosrun door_navigation door_coordinator_node.py            # state machine driving pre/post-door poses
+```
+
+### 4. On the Jetson — start the LLM guide
+
+Inside the Py 3.10 `robotdog_guide` venv (see the [`robotdog_guide/README.md`](../../../robotdog_guide/README.md)):
+
+```bash
+cd ~/satya/robotdog_guide
+source .venv/bin/activate
+export ROSBRIDGE_HOST=<jetson_ip>
+export ROSBRIDGE_PORT=9090
+python main.py
+```
+
+The graph greets the user, listens, and on a `navigate` tool call reaches `/agent/start_navigation` over rosbridge — the same service `robot_command_bridge` exposed in step 2.
+
+### Optional — trigger a goal directly (no LLM)
+
+From any Jetson terminal, once steps 1 and 2 are up:
+
 ```bash
 rosservice call /agent/start_navigation "person: ''
 room: 'home'"
