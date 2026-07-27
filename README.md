@@ -10,13 +10,15 @@ Agentic RobotDog guide framework (runs outside ROS, drives this package over ros
 
 The complete system connects the human-facing agent, rosbridge service layer, and ROS navigation middleware:
 
-
+![Overall human-agent-rosbridge-ROS workflow](docs/images/01_overall_workflow.png)
 
 ### ROS navigation and door traversal
 
 The ROS-side flow is split into goal dispatch and path monitoring (Part 1), followed by door perception, passability decisions, human approval, and traversal (Part 2):
 
+![ROS flow Part 1 — navigation trigger, path monitoring, pre-door approach](docs/images/04a_ros_flow_after_bridge_part1.png)
 
+![ROS flow Part 2 — door handling, approval, and traversal](docs/images/04b_ros_flow_after_bridge_part2.png)
 
 ---
 
