@@ -2,30 +2,21 @@
 
 ROS Noetic package for **indoor navigation through doors** on a Unitree Go1 with a Jetson Orin and a RealSense RGB-D camera. It plugs a lightweight door-perception + coordinator layer on top of an existing `move_base` / AMCL stack, and exposes an agent-facing ROS service so an external LLM guide (running outside ROS) can request navigation over rosbridge.
 
+Agentic RobotDog guide framework (runs outside ROS, drives this package over rosbridge): [**robotdog_guide**](https://github.com/Satya1998-debug/robotdog_guide).
+
 ## Architecture highlights
 
 ### End-to-end workflow
 
 The complete system connects the human-facing agent, rosbridge service layer, and ROS navigation middleware:
 
-<p align="center">
-  <img src="docs/images/01_overall_workflow.png"
-       alt="Overall human-agent-rosbridge-ROS workflow"
-       width="900">
-</p>
+
 
 ### ROS navigation and door traversal
 
 The ROS-side flow is split into goal dispatch and path monitoring (Part 1), followed by door perception, passability decisions, human approval, and traversal (Part 2):
 
-<p align="center">
-  <img src="docs/images/04a_ros_flow_after_bridge_part1.png"
-       alt="ROS flow Part 1 — navigation trigger, path monitoring, pre-door approach"
-       width="45%">
-  <img src="docs/images/04b_ros_flow_after_bridge_part2.png"
-       alt="ROS flow Part 2 — door handling, approval, and traversal"
-       width="45%">
-</p>
+
 
 ---
 
@@ -33,7 +24,7 @@ The ROS-side flow is split into goal dispatch and path monitoring (Part 1), foll
 
 ## Short system overview
 
-**Runtime flow of one navigation request**
+**Runtime flow of one navigation request:**
 
 1. LLM tool calls `/agent/start_navigation` (person, room) via rosbridge.
 2. `robot_command_bridge` looks up the pose in `saved_locations_*.yaml`, publishes it on `/goal` (remapped to `move_base_simple/goal`), and blocks in `GoalManager.wait_for_target_reached(...)`.
@@ -41,7 +32,7 @@ The ROS-side flow is split into goal dispatch and path monitoring (Part 1), foll
 4. `door_coordinator_node` watches the current global plan; when a door intersects the plan it preempts `move_base`, drives to a **pre-door** pose, calls `/door/estimate_state` (YOLO + DepthAnythingTRT + VLM), optionally asks a human via `/voice/speak` + `/voice/listen`, and on approval drives to a **post-door** pose and resumes the original goal.
 5. `GoalManager` returns success (or a failure reason) to the bridge, which returns it to the agent.
 
-**Where things live**
+**Essential files and their overviews:**
 
 - `scripts/robot_command_bridge.py` — exposes `/agent/start_navigation`.
 - `scripts/goal_sender.py` — `GoalManager` (goal publish + arrival wait).
@@ -77,22 +68,24 @@ The ROS-side flow is split into goal dispatch and path monitoring (Part 1), foll
 
 ## Quick start (assumes `SETUP.md` is done and clocks are in sync)
 
-> Prerequisite (per boot): PC ↔ Jetson ↔ Go1 clock sync green (see [`time_sync_setup.md`](time_sync_setup.md)). If clocks drift, TF and rosbridge will fail in confusing ways.
+> Prerequisite (per boot): PC ↔ Jetson ↔ Go1 clock sync green (see `[time_sync_setup.md](time_sync_setup.md)`). If clocks drift, TF and rosbridge will fail in confusing ways.
 
 The Go1 owns `roscore` and the base navigation stack. The Jetson runs perception, the door pipeline, rosbridge, and the LLM guide. Every Jetson terminal expects the workspace to be sourced and pointed at the dog's master:
 
 ```bash
 source ~/satya/catkin_ws/devel/setup.bash
 export ROS_MASTER_URI=http://192.168.123.15:11311   # roscore runs on the Go1
-export ROS_HOSTNAME=192.168.123.147
+export ROS_HOSTNAME=192.168.123.147 # jetson's IP (static)
 ```
+
+
 
 ### 1. On the Go1 — base navigation + `roscore`
 
 SSH into the dog and launch its navigation package. This brings up `roscore`, the map, LIO-SAM localization, `move_base`, and TEB in one shot:
 
 ```bash
-ssh unitree@192.168.123.15
+ssh unitree@192.168.123.15 # login to Go1 to run the Nav Stack
 cd /home/unitree/UnitreeSLAM/catkin_ws_3d/src/Go1_nav
 roslaunch go1_nav go1_navigation.launch \
     map_file:=/home/unitree/.../map_area_04.yaml
@@ -102,7 +95,7 @@ The map used here **must match** the `saved_locations_map_area_04.yaml` used on 
 
 ### 2. On the Jetson — initial pose + auxiliary bringup
 
-**2a. Publish the initial pose to `/initialpose`** (LIO-SAM/AMCL will refine it with ICP once the camera and lidar are streaming):
+**2a. Publish the initial pose to** `/initialpose` (LIO-SAM/AMCL will refine it with ICP once the camera and lidar are streaming):
 
 ```bash
 rosrun door_navigation set_initial_pose.py \
@@ -123,6 +116,8 @@ roslaunch door_navigation auxilary_launch.launch \
     locations_yaml:=$(rospack find door_navigation)/saved_locations_map_area_04.yaml
 ```
 
+
+
 ### 3. On the Jetson — door pipeline
 
 Either bring up all three door nodes together:
@@ -139,9 +134,11 @@ rosrun door_navigation door_state_estimator_node.py        # /door/estimate_stat
 rosrun door_navigation door_coordinator_node.py            # state machine driving pre/post-door poses
 ```
 
+
+
 ### 4. On the Jetson — start the LLM guide
 
-Inside the Py 3.10 `robotdog_guide` venv (see the [`robotdog_guide/README.md`](../../../robotdog_guide/README.md)):
+Inside the Py 3.10 `robotdog_guide` venv (see the `[robotdog_guide/README.md](../../../robotdog_guide/README.md)`):
 
 ```bash
 cd ~/satya/robotdog_guide
@@ -162,4 +159,4 @@ rosservice call /agent/start_navigation "person: ''
 room: 'home'"
 ```
 
-See [`commands.md`](commands.md) for the full command surface.
+See `[commands.md](commands.md)` for the full command surface.
